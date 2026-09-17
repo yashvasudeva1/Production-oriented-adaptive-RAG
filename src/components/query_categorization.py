@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langsmith import traceable
 from pydantic import BaseModel, Field
 
@@ -30,10 +30,12 @@ class QueryCategorization:
     def __init__(
         self,
         prompt_file: Path = PROMPT_FILE,
-        model_name: str = "gemini-3.6-flash-lite"
+        model_name: str | None = None,
     ) -> None:
-        if not os.getenv("GEMINI_API_KEY"):
-            raise EnvironmentError("GEMINI_API_KEY is not set.")
+        model_name = model_name or os.getenv("GROQ_MODEL", os.getenv("LLM_MODEL", "qwen/qwen3.8-27b"))
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise EnvironmentError("GROQ_API_KEY is not set.")
 
         self.prompt_file = Path(prompt_file)
 
@@ -43,11 +45,13 @@ class QueryCategorization:
             )
 
         self.system_prompt = self._load_prompt()
+        self.model_name = model_name
 
-        self.model = ChatGoogleGenerativeAI(
+        self.model = ChatGroq(
             model=model_name,
+            api_key=api_key,
             temperature=0,
-            max_retries=2
+            max_retries=2,
         ).with_structured_output(QueryClassification)
 
     def _load_prompt(self) -> str:
@@ -97,12 +101,13 @@ class QueryCategorization:
             config={
                 "metadata": {
                     "component": "query_categorization",
-                    "model": "gemini-3.6-flash-lite"
+                    "model": self.model_name
                 },
                 "tags": [
                     "rag",
                     "query-classification",
-                    "gemini-3.6-flash-lite"
+                    "groq",
+                    "open-source"
                 ]
             }
         )

@@ -10,7 +10,6 @@ OUTPUT_FILE = "free_tier_models.txt"
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 def get_json(url: str, headers: dict[str, str] | None = None, params: dict[str, str] | None = None) -> dict[str, Any]:
@@ -75,49 +74,6 @@ def get_groq_free_models() -> list[str]:
     }
     return sorted(current_free_plan_ids.intersection(available_ids), key=str.lower)
 
-def get_gemini_free_models() -> list[str]:
-    if not GEMINI_API_KEY:
-        return []
-    get_json(
-        "https://generativelanguage.googleapis.com/v1beta/models",
-        params={"key": GEMINI_API_KEY, "pageSize": "1000"}
-    )
-    current_free_text_models = {
-        "gemini-3-flash-preview",
-        "gemini-3.5-flash-lite",
-        "gemini-3.6-flash",
-        "gemini-3.1-flash-lite",
-        "gemini-2.5-pro",
-        "gemini-3.6-flash",
-        "gemini-3.6-flash-lite",
-        "gemini-3.6-flash-preview-tts",
-        "gemini-3.6-flash-native-audio-preview-12-2025"
-    }
-    available = set()
-    page_token = None
-
-    while True:
-        params = {"key": GEMINI_API_KEY, "pageSize": "1000"}
-        if page_token:
-            params["pageToken"] = page_token
-
-        data = get_json(
-            "https://generativelanguage.googleapis.com/v1beta/models",
-            params=params
-        )
-
-        for model in data.get("models", []):
-            name = model.get("name", "")
-            model_id = name.removeprefix("models/")
-            methods = model.get("supportedGenerationMethods", [])
-            if "generateContent" in methods:
-                available.add(model_id)
-
-        page_token = data.get("nextPageToken")
-        if not page_token:
-            break
-
-    return sorted(current_free_text_models.intersection(available), key=str.lower)
 
 def get_huggingface_models() -> list[dict[str, Any]]:
     if not HF_TOKEN:
@@ -153,7 +109,7 @@ def get_huggingface_models() -> list[dict[str, Any]]:
 
 def write_model_section(file, title: str, models: list[dict[str, Any]]) -> None:
     file.write(f"{title}\n")
-    file.write("=" * len(title) + "\n")
+    file.write("-" * len(title) + "\n")
     file.write(f"Count: {len(models)}\n\n")
 
     for index, model in enumerate(models, 1):
@@ -172,7 +128,6 @@ def main() -> None:
     results: dict[str, Any] = {
         "OpenRouter": [],
         "Groq": [],
-        "Gemini": [],
         "Hugging Face": []
     }
 
@@ -187,25 +142,18 @@ def main() -> None:
         results["Groq"] = [{"id": f"ERROR: {error}"}]
 
     try:
-        results["Gemini"] = [{"id": model_id} for model_id in get_gemini_free_models()]
-    except Exception as error:
-        results["Gemini"] = [{"id": f"ERROR: {error}"}]
-
-    try:
         results["Hugging Face"] = get_huggingface_models()
     except Exception as error:
         results["Hugging Face"] = [{"id": f"ERROR: {error}"}]
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as file:
-        file.write("FREE-TIER / INCLUDED-CREDIT MODEL CATALOG\n")
-        file.write("========================================\n\n")
+        file.write("FREE-TIER / OPEN-SOURCE MODEL CATALOG\n")
+        file.write("-" * 40 + "\n\n")
         file.write("OpenRouter and Groq are filtered using their current provider model/free-plan information.\n")
-        file.write("Gemini is filtered against the current free-tier model set and then intersected with models available to the supplied API key.\n")
         file.write("Hugging Face is listed separately because its free plan provides monthly inference credits rather than a fixed permanently-free model list.\n\n")
 
         write_model_section(file, "OPENROUTER — FREE MODELS", results["OpenRouter"])
         write_model_section(file, "GROQ — FREE PLAN MODELS", results["Groq"])
-        write_model_section(file, "GEMINI — FREE-TIER MODELS", results["Gemini"])
         write_model_section(file, "HUGGING FACE — MODELS ACCESSIBLE THROUGH HF INFERENCE PROVIDERS", results["Hugging Face"])
 
     print(f"Saved {OUTPUT_FILE}")

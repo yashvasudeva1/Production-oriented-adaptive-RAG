@@ -12,9 +12,7 @@ from pydantic import BaseModel, Field
 from .query_metadata_extraction import QueryMetadata, extract_query_metadata
 
 
-# ---------------------------------------------------------------------------
 # Configuration
-# ---------------------------------------------------------------------------
 
 DEFAULT_METADATA_PATH = (
     Path(__file__).resolve().parents[2] / "metadata" / "documents.json"
@@ -37,9 +35,7 @@ SOFT_RETRIEVAL_FIELDS = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Models
-# ---------------------------------------------------------------------------
 
 class FilterResult(BaseModel):
     document_ids: list[str] = Field(default_factory=list)
@@ -83,9 +79,7 @@ class MetadataFilterConfig:
     document_type_aliases: Mapping[str, str] = field(default_factory=dict)
 
 
-# ---------------------------------------------------------------------------
 # Normalization helpers
-# ---------------------------------------------------------------------------
 
 def _normalize(value: Any) -> str:
     """Normalize a scalar for case-insensitive comparison."""
@@ -148,9 +142,7 @@ def _document_id(document: Mapping[str, Any]) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
 # Field matching
-# ---------------------------------------------------------------------------
 
 def _canonical_document_type(
     value: Any,
@@ -266,9 +258,7 @@ def _date_matches(requested: str, actual: str) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
 # Document extraction
-# ---------------------------------------------------------------------------
 
 def _metadata_for_document(document: Mapping[str, Any]) -> Mapping[str, Any]:
     """
@@ -307,9 +297,7 @@ def _field_values(
     return _as_list(metadata.get(field_name))
 
 
-# ---------------------------------------------------------------------------
 # Hard filter evaluation
-# ---------------------------------------------------------------------------
 
 def _matches_hard_filter(
     document: Mapping[str, Any],
@@ -397,9 +385,7 @@ def _filter_documents(
     return candidates
 
 
-# ---------------------------------------------------------------------------
 # Candidate loading
-# ---------------------------------------------------------------------------
 
 def _load_metadata_records(path: str | Path) -> list[dict[str, Any]]:
     metadata_path = Path(path)
@@ -418,12 +404,16 @@ def _load_metadata_records(path: str | Path) -> list[dict[str, Any]]:
     elif isinstance(data, Mapping):
         # Support common wrapper shapes.
         for key in ("documents", "records", "items"):
-            if isinstance(data.get(key), list):
-                records = data[key]
+            val = data.get(key)
+            if isinstance(val, list):
+                records = val
+                break
+            elif isinstance(val, Mapping):
+                records = list(val.values())
                 break
         else:
             raise ValueError(
-                "Metadata JSON must be a list or contain a list under "
+                "Metadata JSON must be a list or contain a list/mapping under "
                 "'documents', 'records', or 'items'."
             )
     else:
@@ -438,9 +428,7 @@ def _load_metadata_records(path: str | Path) -> list[dict[str, Any]]:
     return valid_records
 
 
-# ---------------------------------------------------------------------------
 # Query metadata handling
-# ---------------------------------------------------------------------------
 
 def _query_metadata_to_dict(
     metadata: QueryMetadata | Mapping[str, Any],
@@ -489,9 +477,7 @@ def _extract_retrieval_signals(
     return signals
 
 
-# ---------------------------------------------------------------------------
-# Relaxation / fallback
-# ---------------------------------------------------------------------------
+# Relaxation and fallback
 
 def _relax_filters(
     documents: Sequence[Mapping[str, Any]],
@@ -544,9 +530,7 @@ def _relax_filters(
     return [], relaxed
 
 
-# ---------------------------------------------------------------------------
 # Public component
-# ---------------------------------------------------------------------------
 
 class MetadataFilter:
     """
@@ -686,9 +670,7 @@ class MetadataFilter:
         return result, candidates
 
 
-# ---------------------------------------------------------------------------
 # Functional API
-# ---------------------------------------------------------------------------
 
 def filter_documents(
     *,
@@ -716,9 +698,7 @@ def filter_documents(
     )
 
 
-# ---------------------------------------------------------------------------
 # Example
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     config = MetadataFilterConfig(
@@ -743,9 +723,9 @@ if __name__ == "__main__":
     ]
 
     for query in examples:
-        print("\n" + "=" * 70)
+        print("\n" + "-" * 70)
         print(f"QUERY: {query}")
-        print("=" * 70)
+        print("-" * 70)
 
         result = metadata_filter.filter(query=query)
 

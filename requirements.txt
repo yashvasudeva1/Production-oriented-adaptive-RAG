@@ -3,8 +3,8 @@ langchain
 langchain-core
 langchain-community
 langsmith
-langchain_google_genai
-
+langchain-groq
+groq
 
 #libraries essential for rag 
 huggingface-hub
@@ -43,3 +43,24 @@ uvicorn
 python-dotenv
 requests
 python-docx
+
+
+# Core
+pymupdf>=1.26
+python-docx>=1.2
+python-pptx>=1.0
+openpyxl>=3.1
+beautifulsoup4>=4.13
+pyyaml>=6.0
+pillow>=11.0
+
+# Optional formats
+odfpy>=1.4
+ebooklib>=0.19
+extract-msg>=0.52
+
+# OCR
+pytesseract>=0.3
+
+# Optional media transcription
+faster-whisper>=1.2

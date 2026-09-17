@@ -304,9 +304,9 @@ if __name__ == "__main__":
     ]
 
     for query in test_queries:
-        print("\n" + "=" * 70)
+        print("\n" + "-" * 70)
         print(query)
-        print("=" * 70)
+        print("-" * 70)
 
         try:
             result = extractor.extract(query)
