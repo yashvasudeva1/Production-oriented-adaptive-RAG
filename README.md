@@ -159,9 +159,9 @@ ResearchLens — Benchmark Evaluation Report [Mode: ADAPTIVE]
 Total Test Cases      : 110
 MRR (Mean Reciprocal) : 0.6949
 Recall@K              : 0.8298
-Precision@K           : 0.4757
+Precision@K           : 0.4725
 Hit Rate@K            : 83.0%
-nDCG@K                : 0.7006
+nDCG@K                : 0.6999
 Abstention Accuracy   : 85.5%
 Citation Accuracy     : 97.9%
 ---------------------------------------------------------------------------
@@ -176,27 +176,27 @@ Routing Distribution:
   Abstention Rate     :   3.6%
 ---------------------------------------------------------------------------
 Latency Distribution (ms):
-  Min   :    2.6 ms
-  P50   :    8.4 ms
-  P90   :   13.5 ms
-  P95   :   15.3 ms
-  P99   :   20.9 ms
-  Mean  :    9.9 ms
-  Max   :  116.9 ms
+  Min   :    1.2 ms
+  P50   :    6.0 ms
+  P90   :    8.4 ms
+  P95   :    9.9 ms
+  P99   :   18.0 ms
+  Mean  :    7.0 ms
+  Max   :  105.1 ms
 ---------------------------------------------------------------------------
 Category        | Cases | Recall | Prec   | MRR    | Citations | P50 (ms) | P95 (ms)
 ---------------------------------------------------------------------------
-exact           | 10    | 0.80   | 0.40   | 0.73   | 100.0   % | 9.9      | 73.7    
-conceptual      | 10    | 1.00   | 0.66   | 0.83   | 100.0   % | 6.6      | 8.6     
-procedural      | 10    | 0.90   | 0.39   | 0.68   | 100.0   % | 7.5      | 9.7     
-comparison      | 10    | 1.00   | 0.56   | 0.87   | 100.0   % | 14.9     | 18.6    
-summarization   | 10    | 0.60   | 0.36   | 0.60   | 100.0   % | 8.3      | 9.3     
-multi_part      | 10    | 0.80   | 0.32   | 0.59   | 100.0   % | 11.1     | 13.9    
-metadata_filtered | 10  | 0.80   | 0.74   | 0.80   | 80.0    % | 7.8      | 11.9    
-multi_hop       | 10    | 0.90   | 0.51   | 0.64   | 100.0   % | 7.5      | 8.6     
-unanswerable    | 10    | N/A    | N/A    | N/A    | N/A       | 6.1      | 8.8     
-false_premise   | 10    | 0.70   | 0.36   | 0.53   | 100.0   % | 8.6      | 10.1    
-adversarial     | 10    | 0.75   | 0.47   | 0.62   | 100.0   % | 9.3      | 12.7    
+exact           | 10    | 0.80   | 0.41   | 0.73   | 100.0   % | 6.8      | 66.3    
+conceptual      | 10    | 1.00   | 0.66   | 0.83   | 100.0   % | 4.9      | 6.7     
+procedural      | 10    | 0.90   | 0.37   | 0.68   | 100.0   % | 4.9      | 7.1     
+comparison      | 10    | 1.00   | 0.56   | 0.87   | 100.0   % | 9.0      | 10.5    
+summarization   | 10    | 0.60   | 0.36   | 0.60   | 100.0   % | 5.2      | 7.4     
+multi_part      | 10    | 0.80   | 0.32   | 0.59   | 100.0   % | 7.0      | 9.5     
+metadata_filtered | 10  | 0.80   | 0.74   | 0.80   | 80.0    % | 5.6      | 8.7     
+multi_hop       | 10    | 0.90   | 0.51   | 0.64   | 100.0   % | 4.9      | 7.9     
+unanswerable    | 10    | N/A    | N/A    | N/A    | N/A       | 5.3      | 7.2     
+false_premise   | 10    | 0.70   | 0.36   | 0.53   | 100.0   % | 6.2      | 7.3     
+adversarial     | 10    | 0.75   | 0.42   | 0.62   | 100.0   % | 5.6      | 7.4    
 ---------------------------------------------------------------------------
 ```
 
@@ -207,14 +207,14 @@ Evaluation of 8 systematic configurations (`A` through `H`) measuring quality me
 
 | Configuration | Recall@5 | Prec@5 | MRR | nDCG@5 | P50 Latency | P95 Latency | Mean Latency | Pareto Optimal |
 |---|---|---|---|---|---|---|---|---|
-| **A. BM25 Only** | 0.8617 | 0.5170 | 0.7750 | 0.7933 | 0.3 ms | 0.6 ms | 0.3 ms | **YES** |
-| **B. Dense Only** | 0.7021 | 0.3489 | 0.5493 | 0.5749 | 1.3 ms | 2.3 ms | 1.4 ms | No |
-| **C. Hybrid (Dense + BM25)** | 0.8617 | 0.5170 | 0.7418 | 0.7656 | 4.2 ms | 6.6 ms | 4.4 ms | No |
-| **D. Hybrid + Filter** | **0.8830** | 0.5128 | 0.7512 | 0.7800 | 4.9 ms | 7.3 ms | 6.2 ms | No |
-| **E. Hybrid + Filter + Static Rerank** | 0.8404 | 0.4809 | 0.7060 | 0.7331 | 6.9 ms | 10.0 ms | 7.3 ms | No |
-| **F. Adaptive Routing (No Rerank)** | **0.8830** | 0.5128 | 0.7512 | 0.7802 | 4.7 ms | 7.3 ms | 4.6 ms | **YES** |
-| **G. Full System (Conditional Rerank)**| 0.8298 | 0.4757 | 0.6949 | 0.7006 | 6.5 ms | 11.3 ms | 6.8 ms | No |
-| **H. Full System + Warm Cache** | 0.8298 | 0.4757 | 0.6949 | 0.7006 | 2.8 ms | 4.5 ms | 2.9 ms | No |
+| **A. BM25 Only** | 0.8617 | 0.5170 | 0.7750 | 0.7933 | 0.4 ms | 0.7 ms | 0.4 ms | **YES** |
+| **B. Dense Only** | 0.7128 | 0.3596 | 0.5321 | 0.5746 | 0.9 ms | 1.7 ms | 1.0 ms | No |
+| **C. Hybrid (Dense + BM25)** | 0.8617 | 0.5170 | 0.7431 | 0.7626 | 3.4 ms | 5.2 ms | 3.5 ms | No |
+| **D. Hybrid + Filter** | **0.8830** | 0.5128 | 0.7569 | 0.7794 | 3.8 ms | 8.0 ms | 5.3 ms | **YES** |
+| **E. Hybrid + Filter + Static Rerank** | 0.8404 | 0.4809 | 0.7060 | 0.7331 | 5.4 ms | 7.8 ms | 5.6 ms | No |
+| **F. Adaptive Routing (No Rerank)** | **0.8830** | 0.5128 | 0.7569 | 0.7797 | 4.5 ms | 6.7 ms | 4.5 ms | **YES** |
+| **G. Full System (Conditional Rerank)**| 0.8298 | 0.4725 | 0.6949 | 0.6999 | 6.0 ms | 9.7 ms | 6.1 ms | No |
+| **H. Full System + Warm Cache** | 0.8298 | 0.4725 | 0.6949 | 0.6999 | 2.6 ms | 4.7 ms | 2.8 ms | No |
 
 #### Key Takeaways from the Ablation:
 1. **The Static Reranking Tax**: Configuration E (unconditional cross-encoder reranking) introduces an average latency penalty of **867.9ms** (P95: 2741.7ms).
