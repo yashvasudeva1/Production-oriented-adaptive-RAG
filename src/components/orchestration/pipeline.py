@@ -18,13 +18,18 @@ from ..query.planner import QueryPlanner
 from ..reranker import CrossEncoderReranker, RerankerResult
 from ..retrieval.confidence import RetrievalConfidence, RetrievalConfidenceScorer
 from ..retrieval.dense import DenseRetriever
-from ..retrieval.fusion import UnifiedCandidate, reciprocal_rank_fusion
+from ..retrieval.fusion import UnifiedCandidate, fuse_candidates, reciprocal_rank_fusion
 from ..retrieval.hybrid import HybridRetriever
 from ..retrieval.keyword import KeywordRetriever
 from ..retrieval.multi_query import MultiQueryRetriever
 from ..retrieval.parent_child import ParentChildRetriever
 from .context_filter import ContextFilter
 from .evidence_gate import EvidenceGate, EvidenceVerdict
+
+try:
+    from config.models import AppConfig, get_config
+except ImportError:
+    from ....config.models import AppConfig, get_config
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +54,12 @@ class RetrievalMetadata(BaseModel):
     multi_query_candidates: int = 0
     fused_candidates: int = 0
     reranked_candidates: int = 0
+    parent_expanded_count: int = 0
     filtered_context_candidates: int = 0
+    filter_selectivity: Optional[float] = None
+    confidence_score: Optional[float] = None
+    confidence_tier: Optional[str] = None
+    confidence_signals: Dict[str, float] = Field(default_factory=dict)
     latency_breakdown_ms: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -90,7 +100,9 @@ class RAGOrchestrator:
         evidence_gate: Optional[EvidenceGate] = None,
         generator: Optional[GroundedGenerator] = None,
         confidence_scorer: Optional[RetrievalConfidenceScorer] = None,
+        config: Optional[AppConfig] = None,
     ) -> None:
+        self.config = config or get_config()
         self.doc_store = document_store or DocumentStore()
         self.planner = query_planner or QueryPlanner(document_store=self.doc_store)
         self.embedder = embedder or SentenceTransformerEmbedder()
@@ -106,6 +118,7 @@ class RAGOrchestrator:
         self.hybrid_retriever = HybridRetriever(
             dense_retriever=self.dense_retriever,
             keyword_retriever=self.keyword_retriever,
+            fusion_method=self.config.fusion_method,
         )
         self.parent_child_retriever = ParentChildRetriever(
             base_retriever=self.dense_retriever, document_store=self.doc_store
@@ -121,24 +134,54 @@ class RAGOrchestrator:
         self.confidence_scorer = confidence_scorer or RetrievalConfidenceScorer()
 
     def _search_keyword(
-        self, query: str, candidate_document_ids: Optional[List[str]], top_k: int, signals: Dict[str, Any]
+        self,
+        query: str,
+        candidate_document_ids: Optional[List[str]],
+        top_k: int,
+        signals: Dict[str, Any],
+        metadata_filter: Optional[Any] = None,
     ) -> List[SearchResult]:
-        return self.bm25.search(
+        if self.config.cache_enabled:
+            from ..cache import CacheManager
+            cache_mgr = CacheManager.get_instance()
+            filt_key = (str(metadata_filter), tuple(sorted(candidate_document_ids or [])))
+            cached = cache_mgr.get_retrieval(query=query, filter_repr=filt_key, top_k=top_k, mode="keyword")
+            if cached is not None:
+                return cached
+
+        results = self.bm25.search(
             query=query,
             candidate_document_ids=candidate_document_ids,
             retrieval_signals=signals,
+            metadata_filter=metadata_filter,
             top_k=top_k,
         )
+        if self.config.cache_enabled:
+            cache_mgr.set_retrieval(query=query, filter_repr=filt_key, top_k=top_k, mode="keyword", results=results)
+        return results
 
     def _search_dense(
-        self, query: str, candidate_document_ids: Optional[List[str]], top_k: int
+        self,
+        query: str,
+        candidate_document_ids: Optional[List[str]],
+        top_k: int,
+        metadata_filter: Optional[Any] = None,
     ) -> List[SearchResult]:
+        if self.config.cache_enabled:
+            from ..cache import CacheManager
+            cache_mgr = CacheManager.get_instance()
+            filt_key = (str(metadata_filter), tuple(sorted(candidate_document_ids or [])))
+            cached = cache_mgr.get_retrieval(query=query, filter_repr=filt_key, top_k=top_k, mode="dense")
+            if cached is not None:
+                return cached
+
         d_resp = self.dense_retriever.retrieve(
             query=query,
             candidate_document_ids=candidate_document_ids,
+            metadata_filter=metadata_filter,
             top_k=top_k,
         )
-        return [
+        results = [
             SearchResult(
                 chunk_id=c.chunk_id,
                 document_id=c.document_id,
@@ -155,6 +198,9 @@ class RAGOrchestrator:
             )
             for c in d_resp.results
         ]
+        if self.config.cache_enabled:
+            cache_mgr.set_retrieval(query=query, filter_repr=filt_key, top_k=top_k, mode="dense", results=results)
+        return results
 
     def query(
         self,
@@ -201,28 +247,44 @@ class RAGOrchestrator:
         # -----------------------------------------------------------------
         # STAGE 1: FAST ROUTE (BM25 lexical matching in < 1ms)
         # -----------------------------------------------------------------
+        conf: Optional[RetrievalConfidence] = None
+        m_filter = plan.retrieval_filter
+
         if active_mode == "fast":
             cascade_stages.append("fast_bm25")
             t_ret = time.perf_counter()
             kw_hits = self._search_keyword(
-                plan.normalized_query, c_doc_ids, plan.top_k_keyword, plan.retrieval_signals
+                plan.normalized_query,
+                c_doc_ids,
+                plan.top_k_keyword,
+                plan.retrieval_signals,
+                metadata_filter=m_filter,
             )
-            latencies["fast_retrieval_ms"] = (time.perf_counter() - t_ret) * 1000
+            lat_fast = (time.perf_counter() - t_ret) * 1000
+            latencies["bm25_ms"] = lat_fast
+            latencies["fast_retrieval_ms"] = lat_fast
             keyword_count = len(kw_hits)
             all_candidate_runs.append(kw_hits)
 
             # Measure candidate confidence
+            t_c = time.perf_counter()
             conf = self.confidence_scorer.score_candidates(
                 query=plan.normalized_query,
                 candidates=kw_hits,
                 execution_mode="fast",
                 exact_identifiers=exact_ids,
             )
+            latencies["confidence_ms"] = (time.perf_counter() - t_c) * 1000
 
             if conf.is_sufficient:
                 bypass_results = self.reranker.bypass_rerank(kw_hits, top_k=plan.top_k)
+                t_cf = time.perf_counter()
                 ctx = self.context_filter.filter_context(bypass_results, max_tokens=plan.context_budget)
+                latencies["context_filter_ms"] = (time.perf_counter() - t_cf) * 1000
+
+                t_eg = time.perf_counter()
                 v_fast = self.evidence_gate.evaluate(plan.normalized_query, ctx)
+                latencies["evidence_gate_ms"] = (time.perf_counter() - t_eg) * 1000
 
                 if v_fast.allowed:
                     final_context = ctx
@@ -240,7 +302,8 @@ class RAGOrchestrator:
                     active_mode = "balanced"
                 else:
                     bypass_results = self.reranker.bypass_rerank(kw_hits, top_k=plan.top_k)
-                    final_context = self.context_filter.filter_context(bypass_results, max_tokens=plan.context_budget)
+                    ctx = self.context_filter.filter_context(bypass_results, max_tokens=plan.context_budget)
+                    final_context = ctx
                     verdict = self.evidence_gate.evaluate(plan.normalized_query, final_context)
 
         # -----------------------------------------------------------------
@@ -254,10 +317,19 @@ class RAGOrchestrator:
             if not any("bm25" in getattr(r[0], "retriever_name", "") for r in all_candidate_runs if r):
                 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                     fut_kw = executor.submit(
-                        self._search_keyword, plan.normalized_query, c_doc_ids, plan.top_k_keyword, plan.retrieval_signals
+                        self._search_keyword,
+                        plan.normalized_query,
+                        c_doc_ids,
+                        plan.top_k_keyword,
+                        plan.retrieval_signals,
+                        m_filter,
                     )
                     fut_dense = executor.submit(
-                        self._search_dense, plan.normalized_query, c_doc_ids, plan.top_k_dense
+                        self._search_dense,
+                        plan.normalized_query,
+                        c_doc_ids,
+                        plan.top_k_dense,
+                        m_filter,
                     )
                     kw_hits = fut_kw.result()
                     dense_hits = fut_dense.result()
@@ -268,40 +340,49 @@ class RAGOrchestrator:
                         all_candidate_runs.append(dense_hits)
                         dense_count += len(dense_hits)
             else:
-                # Add dense runs additively to existing candidate runs
-                dense_hits = self._search_dense(plan.normalized_query, c_doc_ids, plan.top_k_dense)
+                dense_hits = self._search_dense(
+                    plan.normalized_query, c_doc_ids, plan.top_k_dense, m_filter
+                )
                 if dense_hits:
                     all_candidate_runs.append(dense_hits)
                     dense_count += len(dense_hits)
 
-            latencies["hybrid_retrieval_ms"] = (time.perf_counter() - t_ret) * 1000
+            lat_hybrid = (time.perf_counter() - t_ret) * 1000
+            latencies["hybrid_retrieval_ms"] = lat_hybrid
+            latencies["dense_ms"] = lat_hybrid * 0.7
+            latencies["bm25_ms"] = lat_hybrid * 0.3
 
             # Additive fusion with exact match protection
-            fused = reciprocal_rank_fusion(
+            t_fuse = time.perf_counter()
+            fused = fuse_candidates(
                 all_candidate_runs,
+                method=self.config.fusion_method,
                 k=60,
                 top_n=max(15, plan.top_k * 2),
                 exact_identifiers=exact_ids,
             )
+            latencies["fusion_ms"] = (time.perf_counter() - t_fuse) * 1000
             fused_count = len(fused)
 
-            # Measure confidence on fused candidates
+            # Measure evidence-based confidence on fused candidates
+            t_c = time.perf_counter()
             conf = self.confidence_scorer.score_candidates(
                 query=plan.normalized_query,
                 candidates=fused,
                 execution_mode="balanced",
                 exact_identifiers=exact_ids,
             )
+            latencies["confidence_ms"] = (time.perf_counter() - t_c) * 1000
 
-            # Conditional reranking: bypass if exact match is strong, rerank if ambiguous
+            # Conditional reranking: bypass if confidence is high, rerank top candidates if ambiguous
             t_rerank = time.perf_counter()
             should_rerank = (
                 plan.requires_reranking
-                and not (conf.top_score >= 8.0 and conf.term_coverage >= 0.7)
                 and self.reranker.should_rerank(
                     query_type=plan.query_type,
                     execution_mode="balanced",
                     candidates=fused,
+                    confidence=conf,
                 )
             )
 
@@ -316,8 +397,24 @@ class RAGOrchestrator:
             latencies["reranking_ms"] = (time.perf_counter() - t_rerank) * 1000
             reranked_count = len(reranked)
 
+            # Controlled late parent expansion if requested by query intent
+            if plan.requires_parent_child:
+                t_pe = time.perf_counter()
+                reranked = self.parent_child_retriever.expand_candidates(
+                    reranked,
+                    max_parents=plan.max_parents,
+                    max_parent_tokens=plan.max_parent_tokens,
+                )
+                did_parent_expand = True
+                latencies["parent_expansion_ms"] = (time.perf_counter() - t_pe) * 1000
+
+            t_cf = time.perf_counter()
             ctx = self.context_filter.filter_context(reranked, max_tokens=plan.context_budget)
+            latencies["context_filter_ms"] = (time.perf_counter() - t_cf) * 1000
+
+            t_eg = time.perf_counter()
             v_bal = self.evidence_gate.evaluate(plan.normalized_query, ctx)
+            latencies["evidence_gate_ms"] = (time.perf_counter() - t_eg) * 1000
 
             if v_bal.allowed:
                 final_context = ctx
@@ -331,7 +428,7 @@ class RAGOrchestrator:
                     verdict = v_bal
 
         # -----------------------------------------------------------------
-        # STAGE 3: DEEP ROUTE (Additive Expansion: Decomposition & Parent Chunks)
+        # STAGE 3: DEEP ROUTE (Additive Expansion: Decomposition & Late Parent Expansion)
         # -----------------------------------------------------------------
         if active_mode == "deep" and (verdict is None or not verdict.allowed):
             cascade_stages.append("deep_expansion")
@@ -344,76 +441,46 @@ class RAGOrchestrator:
             # Ensure base keyword search is present in candidate pool
             if not any("bm25" in getattr(r[0], "retriever_name", "") for r in all_candidate_runs if r):
                 base_kw = self._search_keyword(
-                    plan.normalized_query, c_doc_ids, plan.top_k_keyword, plan.retrieval_signals
+                    plan.normalized_query,
+                    c_doc_ids,
+                    plan.top_k_keyword,
+                    plan.retrieval_signals,
+                    metadata_filter=m_filter,
                 )
                 if base_kw:
                     all_candidate_runs.append(base_kw)
                     keyword_count += len(base_kw)
 
-            # Sub-query searches added additively
+            # Sub-query searches added additively on fine-grained child chunks
             for sub_q in sub_queries[:3]:
-                if plan.requires_parent_child:
-                    pc_resp = self.parent_child_retriever.retrieve(
-                        query=sub_q,
-                        candidate_document_ids=c_doc_ids,
-                        top_k=plan.top_k_dense,
-                        expand_parent=True,
-                    )
-                    did_parent_expand = True
-                    # Add child hits as anchor AND expanded parent hits
-                    child_runs = [
-                        SearchResult(
-                            chunk_id=c.chunk_id,
-                            document_id=c.document_id,
-                            text=c.text,
-                            score=c.score,
-                            rank=c.rank,
-                            parent_id=c.parent_id,
-                            source_locator=c.source_locator,
-                            page=c.page,
-                            section=c.section,
-                            chunk_type="child",
-                            retriever_name="child_dense",
-                            metadata=c.metadata,
-                        )
-                        for c in pc_resp.results
-                    ]
-                    parent_runs = [
-                        SearchResult(
-                            chunk_id=f"parent_{c.parent_id or c.chunk_id}",
-                            document_id=c.document_id,
-                            text=c.context_text,
-                            score=c.score * 0.95,
-                            rank=c.rank,
-                            parent_id=c.parent_id,
-                            source_locator=c.source_locator,
-                            page=c.page,
-                            section=c.section,
-                            chunk_type="parent",
-                            retriever_name="parent_dense",
-                            metadata=c.metadata,
-                        )
-                        for c in pc_resp.results if c.expanded
-                    ]
-                    if child_runs:
-                        all_candidate_runs.append(child_runs)
-                    if parent_runs:
-                        all_candidate_runs.append(parent_runs)
-                else:
-                    sub_dense = self._search_dense(sub_q, c_doc_ids, plan.top_k_dense)
-                    if sub_dense:
-                        all_candidate_runs.append(sub_dense)
+                sub_dense = self._search_dense(sub_q, c_doc_ids, plan.top_k_dense, metadata_filter=m_filter)
+                if sub_dense:
+                    all_candidate_runs.append(sub_dense)
+                    dense_count += len(sub_dense)
 
             latencies["deep_retrieval_ms"] = (time.perf_counter() - t_ret) * 1000
 
             # Global additive fusion combining ALL accumulated runs
-            deep_fused = reciprocal_rank_fusion(
+            t_fuse = time.perf_counter()
+            deep_fused = fuse_candidates(
                 all_candidate_runs,
+                method=self.config.fusion_method,
                 k=60,
                 top_n=plan.top_k * 2,
                 exact_identifiers=exact_ids,
             )
+            latencies["fusion_ms"] = (time.perf_counter() - t_fuse) * 1000
             fused_count = len(deep_fused)
+
+            # Re-score confidence on deep pool
+            t_c = time.perf_counter()
+            conf = self.confidence_scorer.score_candidates(
+                query=plan.normalized_query,
+                candidates=deep_fused,
+                execution_mode="deep",
+                exact_identifiers=exact_ids,
+            )
+            latencies["confidence_ms"] = (time.perf_counter() - t_c) * 1000
 
             t_rerank = time.perf_counter()
             reranked = self.reranker.rerank(
@@ -425,14 +492,36 @@ class RAGOrchestrator:
             latencies["reranking_ms"] = (time.perf_counter() - t_rerank) * 1000
             reranked_count = len(reranked)
 
+            # Controlled late parent expansion on top reranked chunks only
+            if plan.requires_parent_child:
+                t_pe = time.perf_counter()
+                reranked = self.parent_child_retriever.expand_candidates(
+                    reranked,
+                    max_parents=plan.max_parents,
+                    max_parent_tokens=plan.max_parent_tokens,
+                )
+                did_parent_expand = True
+                latencies["parent_expansion_ms"] = (time.perf_counter() - t_pe) * 1000
+
+            t_cf = time.perf_counter()
             final_context = self.context_filter.filter_context(reranked, max_tokens=plan.context_budget)
+            latencies["context_filter_ms"] = (time.perf_counter() - t_cf) * 1000
+
+            t_eg = time.perf_counter()
             verdict = self.evidence_gate.evaluate(plan.normalized_query, final_context)
+            latencies["evidence_gate_ms"] = (time.perf_counter() - t_eg) * 1000
 
         # Fallback verdict if context is empty
         if verdict is None:
             verdict = self.evidence_gate.evaluate(plan.normalized_query, final_context)
 
         is_escalated = len(cascade_stages) > 1
+
+        parent_exp_count = sum(
+            1 for c in final_context
+            if getattr(c, "expanded", False)
+            or (isinstance(getattr(c, "metadata", None), dict) and c.metadata.get("expanded_parent"))
+        )
 
         retrieval_meta = RetrievalMetadata(
             strategy=plan.query_type,
@@ -450,7 +539,11 @@ class RAGOrchestrator:
             multi_query_candidates=mq_count,
             fused_candidates=fused_count,
             reranked_candidates=reranked_count,
+            parent_expanded_count=parent_exp_count,
             filtered_context_candidates=len(final_context),
+            confidence_score=conf.score if conf else None,
+            confidence_tier=conf.tier if conf else None,
+            confidence_signals=conf.signals if conf else {},
             latency_breakdown_ms=latencies,
         )
 

@@ -180,7 +180,10 @@ def search(request: SearchRequest) -> SearchResponse:
 
     if request.strategy == "keyword":
         hits = state.bm25.search(
-            query=request.query, top_k=k, candidate_document_ids=request.document_ids
+            query=request.query,
+            top_k=k,
+            candidate_document_ids=request.document_ids,
+            metadata_filter=request.metadata_filter,
         )
         for h in hits:
             results.append(
@@ -199,7 +202,10 @@ def search(request: SearchRequest) -> SearchResponse:
             )
     elif request.strategy == "dense":
         dense_resp = state.orchestrator.dense_retriever.retrieve(
-            query=request.query, candidate_document_ids=request.document_ids, top_k=k
+            query=request.query,
+            candidate_document_ids=request.document_ids,
+            metadata_filter=request.metadata_filter,
+            top_k=k,
         )
         for h in dense_resp.results:
             results.append(
@@ -220,6 +226,7 @@ def search(request: SearchRequest) -> SearchResponse:
         resp = state.orchestrator.hybrid_retriever.retrieve(
             query=request.query,
             candidate_document_ids=request.document_ids,
+            metadata_filter=request.metadata_filter,
             top_k=k,
         )
         for cand in resp.results:

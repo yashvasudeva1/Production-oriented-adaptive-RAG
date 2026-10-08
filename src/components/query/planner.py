@@ -67,43 +67,59 @@ class QueryPlanner:
             "code_symbols": signals.code_symbols,
         }
         extracted_meta: Dict[str, Any] = {}
+        from ..retrieval.filters import RetrievalFilter, FilterCondition
 
-        # Run metadata filtering only if constraints or explicit document scoping are detected
-        if mode in ("balanced", "deep") and self.metadata_filter and not candidate_ids:
+        retrieval_filter = RetrievalFilter()
+        if candidate_ids:
+            retrieval_filter.document_ids = list(candidate_ids)
+
+        # Run metadata filtering when constraints are detected
+        if self.metadata_extractor:
             extracted_meta = self.metadata_extractor.extract(norm_query)
-            if extracted_meta.get("document_type") or extracted_meta.get("organizations") or extracted_meta.get("dates"):
-                try:
-                    qm = QueryMetadata(
-                        document_type=extracted_meta.get("document_type", ""),
-                        organizations=extracted_meta.get("organizations", []),
-                        locations=extracted_meta.get("locations", []),
-                        dates=extracted_meta.get("dates", []),
-                        department=extracted_meta.get("department", ""),
-                        topics=extracted_meta.get("topics", []),
-                    )
-                    filter_res = self.metadata_filter.filter(query_metadata=qm)
-                    if filter_res.applied_filters and filter_res.document_ids:
-                        filtered_meta_ids = set(filter_res.document_ids)
-                        candidate_ids = list(filtered_meta_ids)
 
-                        if self.document_store:
-                            id_to_filename = {}
-                            for doc_rec in getattr(self.metadata_filter, "documents", []):
-                                d_id = doc_rec.get("document_id")
-                                fname = doc_rec.get("filename")
-                                if d_id and fname:
-                                    id_to_filename[d_id] = fname
+            # Build canonical hard filters directly on metadata fields
+            if extracted_meta.get("document_type"):
+                retrieval_filter.add_hard_filter("document_type", extracted_meta["document_type"])
+            if extracted_meta.get("department"):
+                retrieval_filter.add_hard_filter("department", extracted_meta["department"])
+            if extracted_meta.get("organizations"):
+                orgs = extracted_meta["organizations"]
+                retrieval_filter.add_hard_filter("organizations", orgs if isinstance(orgs, list) else [orgs], operator="in")
+            if extracted_meta.get("dates"):
+                dts = extracted_meta["dates"]
+                retrieval_filter.add_hard_filter("dates", dts if isinstance(dts, list) else [dts], operator="in")
+            if extracted_meta.get("locations"):
+                locs = extracted_meta["locations"]
+                retrieval_filter.add_hard_filter("locations", locs if isinstance(locs, list) else [locs], operator="in")
 
-                            store_docs = self.document_store.list_documents()
-                            for s_doc in store_docs:
-                                for meta_id in filtered_meta_ids:
-                                    if id_to_filename.get(meta_id) == s_doc.filename:
-                                        candidate_ids.append(s_doc.document_id)
-                        candidate_ids = list(set(candidate_ids))
+            # Soft preferences / retrieval hints
+            if extracted_meta.get("topics"):
+                retrieval_signals["topics"] = extracted_meta["topics"]
+            if signals.exact_identifiers:
+                retrieval_filter.retrieval_hints.technical_identifiers.extend(signals.exact_identifiers)
+            if signals.quoted_phrases:
+                retrieval_filter.retrieval_hints.quoted_phrases.extend(signals.quoted_phrases)
 
-                    retrieval_signals.update(filter_res.retrieval_signals)
-                except Exception as exc:
-                    logger.warning(f"Metadata filtering skipped: {exc}")
+            # Legacy metadata filter compatibility for backward-compatible tests
+            if mode in ("balanced", "deep") and self.metadata_filter and not candidate_ids:
+                if extracted_meta.get("document_type") or extracted_meta.get("organizations") or extracted_meta.get("dates"):
+                    try:
+                        qm = QueryMetadata(
+                            document_type=extracted_meta.get("document_type", ""),
+                            organizations=extracted_meta.get("organizations", []),
+                            locations=extracted_meta.get("locations", []),
+                            dates=extracted_meta.get("dates", []),
+                            department=extracted_meta.get("department", ""),
+                            topics=extracted_meta.get("topics", []),
+                        )
+                        filter_res = self.metadata_filter.filter(query_metadata=qm)
+                        if filter_res.applied_filters and filter_res.document_ids:
+                            candidate_ids = list(set(filter_res.document_ids))
+                            if not retrieval_filter.document_ids:
+                                retrieval_filter.document_ids = candidate_ids
+                        retrieval_signals.update(filter_res.retrieval_signals)
+                    except Exception as exc:
+                        logger.warning(f"Legacy metadata filter fallback skipped: {exc}")
 
         # Sub-query decomposition for deep mode
         sub_queries: List[str] = []
@@ -174,6 +190,7 @@ class QueryPlanner:
             sub_queries=sub_queries if req_decomposition else [],
             candidate_document_ids=candidate_ids,
             metadata_filters=extracted_meta,
+            retrieval_filter=retrieval_filter,
             retrieval_signals=retrieval_signals,
             requires_dense=req_dense,
             requires_keyword=req_keyword,
@@ -183,13 +200,13 @@ class QueryPlanner:
             requires_parent_child=req_parent_child,
             requires_multi_query=req_multi_query,
             requires_decomposition=req_decomposition,
-            requires_metadata_filter=has_meta_filter,
+            requires_metadata_filter=has_meta_filter or not retrieval_filter.is_empty(),
             requires_reranking=req_rerank,
             top_k=top_k,
             top_k_dense=top_k_dense,
             top_k_keyword=top_k_keyword,
             rerank_top_k=rerank_top_k,
             context_budget=context_budget,
-            confidence=0.95 if mode == "fast" else 0.85,
+            confidence=0.90 if mode == "fast" else 0.80,
             reasoning=f"Route: {mode.upper()} via signals (intent={signals.intent}, complexity={signals.complexity})",
         )

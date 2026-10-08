@@ -64,28 +64,39 @@ class ParentChildRetriever:
         *,
         candidate_document_ids: Optional[Sequence[str]] = None,
         filter_criteria: Optional[Dict[str, Any]] = None,
+        metadata_filter: Optional[Any] = None,
         top_k: Optional[int] = None,
         expand_parent: bool = True,
+        max_parents: int = 3,
+        max_parent_tokens: int = 1200,
     ) -> ParentChildRetrievalResponse:
         k = top_k or self.default_top_k
         dense_resp = self.base_retriever.retrieve(
             query=query,
             candidate_document_ids=candidate_document_ids,
             filter_criteria=filter_criteria,
+            metadata_filter=metadata_filter,
             top_k=k,
         )
 
         results: List[ParentChildResult] = []
+        parents_expanded = 0
+        total_parent_tokens = 0
+
         for item in dense_resp.results:
             parent_id = item.parent_id or item.metadata.get("parent_chunk_id")
             parent_text = ""
             expanded = False
 
-            if expand_parent and parent_id:
+            if expand_parent and parent_id and parents_expanded < max_parents:
                 stored = self.doc_store.get_parent_text(parent_id)
                 if stored:
-                    parent_text = stored
-                    expanded = True
+                    est_tokens = len(stored.split())
+                    if total_parent_tokens + est_tokens <= max_parent_tokens:
+                        parent_text = stored
+                        expanded = True
+                        parents_expanded += 1
+                        total_parent_tokens += est_tokens
 
             results.append(
                 ParentChildResult(
@@ -111,3 +122,37 @@ class ParentChildRetriever:
             candidate_document_ids=list(candidate_document_ids or []),
             results=results,
         )
+
+    def expand_candidates(
+        self,
+        candidates: Sequence[Any],
+        max_parents: int = 3,
+        max_parent_tokens: int = 1200,
+    ) -> List[Any]:
+        """
+        Controlled late parent expansion on top ranked candidates.
+        Expands selected parent sections while strictly enforcing token and parent count budgets.
+        """
+        expanded_parents_count = 0
+        total_tokens = 0
+        expanded_parent_ids: set[str] = set()
+
+        for c in candidates:
+            pid = getattr(c, "parent_id", None)
+            if not pid and hasattr(c, "metadata") and isinstance(c.metadata, dict):
+                pid = c.metadata.get("parent_chunk_id") or c.metadata.get("parent_id")
+
+            if pid and pid not in expanded_parent_ids and expanded_parents_count < max_parents:
+                parent_text = self.doc_store.get_parent_text(pid)
+                if parent_text:
+                    tokens = len(parent_text.split())
+                    if total_tokens + tokens <= max_parent_tokens:
+                        if hasattr(c, "text"):
+                            c.text = parent_text
+                        expanded_parents_count += 1
+                        total_tokens += tokens
+                        expanded_parent_ids.add(pid)
+                        if hasattr(c, "metadata") and isinstance(c.metadata, dict):
+                            c.metadata["expanded_parent"] = True
+
+        return list(candidates)

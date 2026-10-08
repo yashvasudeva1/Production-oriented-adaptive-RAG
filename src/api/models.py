@@ -44,6 +44,7 @@ class SearchRequest(BaseModel):
     top_k: int = 10
     document_ids: Optional[List[str]] = None
     strategy: str = "hybrid"  # dense, keyword, hybrid, parent_child, multi_query
+    metadata_filter: Optional[Dict[str, Any]] = None
 
 
 class SearchItem(BaseModel):

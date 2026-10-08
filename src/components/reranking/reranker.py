@@ -48,10 +48,12 @@ class CrossEncoderReranker:
         model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
         device: str = "cpu",
         default_top_k: int = 5,
+        confidence_threshold: float = 0.85,
     ) -> None:
         self.model_name = model_name
         self.device = device
         self.default_top_k = default_top_k
+        self.confidence_threshold = confidence_threshold
         self._model = None
 
     def _load_model(self):
@@ -80,19 +82,36 @@ class CrossEncoderReranker:
         query_type: str = "general",
         execution_mode: str = "balanced",
         candidates: Optional[Sequence[Any]] = None,
+        confidence: Optional[Any] = None,
     ) -> bool:
-        """Determines whether reranking adds value or if candidates are sufficiently strong."""
+        """
+        Determines whether reranking adds value or if candidates have high confidence.
+        Confidence >= confidence_threshold (e.g. 0.85) bypasses expensive cross-encoder inference.
+        """
         if execution_mode == "fast":
             return False
         if not candidates:
             return False
         if len(candidates) <= 1:
             return False
-        # If fact query has a candidate with very high dominant score, skip rerank
+
+        # If evidence confidence is provided, skip reranking when confidence is high
+        if confidence is not None:
+            score = getattr(confidence, "score", None)
+            if score is None and isinstance(confidence, (int, float)):
+                score = float(confidence)
+            if score is not None and score >= self.confidence_threshold:
+                logger.debug(
+                    f"Bypassing reranker: retrieval confidence {score:.2f} >= threshold {self.confidence_threshold:.2f}"
+                )
+                return False
+
+        # Fallback heuristic for dominant exact/fact scores
         if query_type in ("fact", "technical_exact") and candidates:
             top_score = _get_field(candidates[0], "fusion_score", 0.0) or _get_field(candidates[0], "score", 0.0)
             if float(top_score) >= 0.03:
                 return False
+
         return True
 
     def bypass_rerank(
@@ -158,18 +177,38 @@ class CrossEncoderReranker:
         if not cand_list:
             return []
 
-        # Score query-document pairs with cross-encoder (or lexical overlap if offline)
-        self._load_model()
-        pairs = [[query, _get_field(c, "text", "")] for c in cand_list]
+        # Check cache for existing query-candidate scores
+        from ..cache import CacheManager
+        cache_mgr = CacheManager.get_instance()
 
-        if self._model and self._model is not False:
-            try:
-                scores = self._model.predict(pairs)
-            except Exception as exc:
-                logger.error(f"Cross-encoder predict failed: {exc}, using fallback.")
-                scores = [self._fallback_score(query, p[1]) for p in pairs]
-        else:
-            scores = [self._fallback_score(query, p[1]) for p in pairs]
+        scores: List[float] = [0.0] * len(cand_list)
+        missing_indices: List[int] = []
+        missing_pairs: List[List[str]] = []
+
+        for idx, c in enumerate(cand_list):
+            c_text = _get_field(c, "text", "")
+            cached_s = cache_mgr.get_rerank_score(self.model_name, query, c_text)
+            if cached_s is not None:
+                scores[idx] = float(cached_s)
+            else:
+                missing_indices.append(idx)
+                missing_pairs.append([query, c_text])
+
+        if missing_pairs:
+            self._load_model()
+            if self._model and self._model is not False:
+                try:
+                    pred_scores = self._model.predict(missing_pairs)
+                except Exception as exc:
+                    logger.error(f"Cross-encoder predict failed: {exc}, using fallback.")
+                    pred_scores = [self._fallback_score(query, p[1]) for p in missing_pairs]
+            else:
+                pred_scores = [self._fallback_score(query, p[1]) for p in missing_pairs]
+
+            for midx, p_score in zip(missing_indices, pred_scores):
+                scores[midx] = float(p_score)
+                c_text = _get_field(cand_list[midx], "text", "")
+                cache_mgr.set_rerank_score(self.model_name, query, c_text, float(p_score))
 
         scored_results: List[RerankerResult] = []
         for cand, score in zip(cand_list, scores):

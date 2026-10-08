@@ -80,6 +80,10 @@ class GroundedGenerator:
         sources: Sequence[CitationSource],
         supporting_chunks: Sequence[RerankerResult],
     ) -> str:
+        # Fast path for offline evaluation, CI, and testing
+        if os.getenv("OFFLINE_EVAL", "0").lower() in ("1", "true", "yes") or self.provider == "offline":
+            return self._offline_extractive_synthesis(query, sources, supporting_chunks)
+
         # Try configured API providers
         groq_key = os.getenv("GROQ_API_KEY")
         openrouter_key = os.getenv("OPENROUTER_API_KEY")
@@ -88,8 +92,6 @@ class GroundedGenerator:
             import requests
             groq_models = [self.model_name] if self.model_name else [
                 os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b"),
-                "groq/compound-mini",
-                "openai/gpt-oss-20b",
                 "llama-3.1-8b-instant",
             ]
             for m in groq_models:
@@ -115,13 +117,17 @@ class GroundedGenerator:
                         "https://api.groq.com/openai/v1/chat/completions",
                         headers=headers,
                         json=payload,
-                        timeout=30,
+                        timeout=5,
                     )
                     if resp.status_code == 200:
                         data = resp.json()
                         return data["choices"][0]["message"]["content"].strip()
+                    elif resp.status_code in (401, 403, 404, 429):
+                        logger.warning(f"Groq API returned HTTP {resp.status_code}; skipping network retry.")
+                        break
                 except Exception as exc:
                     logger.warning(f"Groq generation failed with model {m}: {exc}")
+                    break
 
         if (self.provider == "openrouter" or self.provider == "auto") and openrouter_key:
             try:
@@ -145,7 +151,7 @@ class GroundedGenerator:
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers=headers,
                     json=payload,
-                    timeout=30,
+                    timeout=5,
                 )
                 if resp.status_code == 200:
                     data = resp.json()
