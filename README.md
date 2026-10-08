@@ -103,7 +103,7 @@ Naive RAG systems either post-filter retrieved candidates (starving top-$k$ resu
 - **BM25 Native Pre-Filtering**: Lexical search candidate indices are narrowed *before* computing BM25 term frequency scores, cutting search latency by up to **75%** on selective queries.
 - **Soft Preferences & Hints**: Direct scoring adjustments and exact term extraction for technical codes and identifiers.
 
-### 2. Idempotent Qdrant Payload Indexing
+### 2. Idempotent Qdrant Payload Indexing & Vector Distance Alignment
 Payload schema indices are created during startup across high-cardinality fields:
 - `document_id` (Keyword)
 - `chunk_type` (Keyword)
@@ -114,7 +114,7 @@ Payload schema indices are created during startup across high-cardinality fields
 - `metadata.security_level` (Keyword)
 - `metadata.language` (Keyword)
 
-Index creation is idempotent, version-tracked, and safe for both embedded and remote cluster deployments.
+Index creation is idempotent, version-tracked, and safe for both embedded and remote cluster deployments. Vector parameter distance is configured to **Dot Product** (`Distance.DOT`) on unit-normalized embeddings, stripping out CPU-bound Euclidean normalization overhead during high-concurrency vector scans.
 
 ### 3. Evidence-Based Confidence Estimation & Conditional Reranking
 Unconditional cross-encoder reranking is the #1 latency bottleneck in production RAG systems (adding 400ms–2700ms per query). Production-oriented Adaptive RAG evaluates retrieval confidence using measurable statistical signals:
@@ -139,20 +139,20 @@ Thread-safe LRU + TTL caching layer (`LRUTTLCache`):
 
 ### 6. Multi-Strategy Rank Fusion
 Configurable via `FUSION_METHOD`:
-- **Weighted Reciprocal Rank Fusion (RRF)**:
-  $$\text{RRF}(d) = \sum_{m \in \{\text{dense}, \text{bm25}\}} \frac{w_m}{k + \text{rank}_m(d)}$$
+- **CPU-Optimized Weighted Reciprocal Rank Fusion (RRF)**:
+  $$\text{RRF}(d) = 0.82 \cdot \left(\frac{1}{60 + \text{rank}_{\text{BM25}}(d) + 1}\right) + 0.18 \cdot \left(\frac{1}{60 + \text{rank}_{\text{Dense}}(d) + 1}\right)$$
+  Safeguards elite lexical precision against dense space noise by treating semantic search as a calibrated tie-breaker.
 - **Score-Normalized Linear Fusion**: Min-Max score normalization followed by weighted linear combination.
-
----
-
 
 ---
 
 ## Default Models Configuration
 
-*   **Dense Embedding Model:** sentence-transformers/all-MiniLM-L6-v2 (Configured for 200-token chunks with 30-token overlap to completely eliminate 256-token context truncation).
-*   **Reranker Model:** BAAI/bge-reranker-large (Domain-agnostic, robust, and highly capable).
-*   **Hybrid Rank Fusion:** Weighted Reciprocal Rank Fusion (RRF) with α=0.85, heavily prioritizing BM25 keyword precision while leveraging dense vectors as a semantic tie-breaker.
+*   **Dense Embedding Model:** `thenlper/gte-small` (384-dimensional unit-normalized embeddings, 512-token context window, CPU-optimized inference).
+*   **Vector Distance Metric:** `Distance.DOT` (Dot Product, eliminating square-root normalization overhead on normalized vectors).
+*   **Reranker Model:** `BAAI/bge-reranker-large` (Domain-agnostic, robust, with $\ge 0.85$ confidence bypass).
+*   **Hybrid Rank Fusion:** High-performance Weighted Reciprocal Rank Fusion (RRF) with $w_{\text{BM25}}=0.82$ and $w_{\text{Dense}}=0.18$.
+*   **Chunk Bounds:** 200 standard tokens with 30-token overlap, eliminating context truncation while preserving semantic completeness.
 
 ## Benchmark & Empirical Evaluation
 
