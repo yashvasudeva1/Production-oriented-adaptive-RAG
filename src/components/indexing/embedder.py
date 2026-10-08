@@ -146,6 +146,12 @@ class SentenceTransformerEmbedder(BaseEmbedder):
 
     def embed_query(self, query: str) -> List[float]:
         q_clean = query.strip()
+        from ..cache import CacheManager
+        cache = CacheManager.get_instance()
+        cached = cache.get_embedding(self.model_name, q_clean)
+        if cached is not None:
+            return cached
+
         if q_clean in self._query_cache:
             return self._query_cache[q_clean]
 
@@ -157,4 +163,5 @@ class SentenceTransformerEmbedder(BaseEmbedder):
             del self._query_cache[oldest_key]
 
         self._query_cache[q_clean] = vec
+        cache.set_embedding(self.model_name, q_clean, vec)
         return vec
