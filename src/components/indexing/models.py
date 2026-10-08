@@ -37,6 +37,28 @@ class SearchResult:
     chunk_type: str = "text"
     retriever_name: str = "unknown"
     metadata: Dict[str, Any] = field(default_factory=dict)
+    rrf_score: Optional[float] = None
+
+    def __getitem__(self, item: str) -> Any:
+        try:
+            return getattr(self, item)
+        except AttributeError:
+            raise KeyError(item)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        setattr(self, key, value)
+
+    def __contains__(self, item: str) -> bool:
+        return hasattr(self, item)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+    def copy(self) -> Dict[str, Any]:
+        d = self.to_dict()
+        if self.rrf_score is not None:
+            d["rrf_score"] = self.rrf_score
+        return d
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

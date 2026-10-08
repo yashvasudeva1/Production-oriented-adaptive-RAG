@@ -324,6 +324,7 @@ class TestRetrievalFilterUnit:
         spec = importlib.util.spec_from_file_location("_filters_standalone", path)
         mod = importlib.util.module_from_spec(spec)
         mod.__package__ = "src.components.retrieval"
+        sys.modules["_filters_standalone"] = mod
         # Inject qdrant_client.models stub before execution
         try:
             spec.loader.exec_module(mod)

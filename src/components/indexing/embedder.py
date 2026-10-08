@@ -81,7 +81,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
 
     def __init__(
         self,
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        model_name: str = "thenlper/gte-small",
         device: str = "cpu",
         batch_size: int = 32,
     ) -> None:

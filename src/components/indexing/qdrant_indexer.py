@@ -49,7 +49,7 @@ class QdrantIndexer:
         path: Optional[str] = None,
         api_key: Optional[str] = None,
         vector_size: int = 384,
-        distance: str = "Cosine",
+        distance: str = "Dot",
         client: Optional[QdrantClient] = None,
         create_indexes: bool = True,
     ) -> None:
@@ -72,11 +72,11 @@ class QdrantIndexer:
 
     def _get_distance(self) -> qmodels.Distance:
         dist = self.distance_name.lower()
-        if dist == "dot":
-            return qmodels.Distance.DOT
+        if dist == "cosine":
+            return qmodels.Distance.COSINE
         elif dist == "euclid":
             return qmodels.Distance.EUCLID
-        return qmodels.Distance.COSINE
+        return qmodels.Distance.DOT
 
     def create_payload_indexes(
         self, indexes: Optional[Dict[str, qmodels.PayloadSchemaType]] = None

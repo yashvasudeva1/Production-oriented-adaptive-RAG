@@ -13,7 +13,7 @@ class AppConfig:
     """Global configuration settings for ResearchLens."""
     model_name: str = field(default_factory=lambda: os.getenv("MODEL_NAME", "Qwen/Qwen3-8B"))
     embedding_model: str = field(
-        default_factory=lambda: os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+        default_factory=lambda: os.getenv("EMBEDDING_MODEL", "thenlper/gte-small")
     )
     reranker_model: str = field(
         default_factory=lambda: os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-large")
@@ -21,6 +21,9 @@ class AppConfig:
     qdrant_url: str = field(default_factory=lambda: os.getenv("QDRANT_URL", ""))
     qdrant_collection: str = field(
         default_factory=lambda: os.getenv("QDRANT_COLLECTION", "researchlens_chunks")
+    )
+    qdrant_distance: str = field(
+        default_factory=lambda: os.getenv("QDRANT_DISTANCE", "Dot")
     )
     bm25_index_path: str = field(
         default_factory=lambda: os.getenv("BM25_INDEX_PATH", "metadata/chunks.json")
