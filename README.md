@@ -1,4 +1,4 @@
-# ResearchLens: Adaptive, Filter-Aware, Hybrid, Confidence-Gated RAG Platform
+# Production-oriented Adaptive RAG: Adaptive, Filter-Aware, Hybrid, Confidence-Gated RAG Platform
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Tests Passing](https://img.shields.io/badge/Tests-46%20Passed-brightgreen.svg)](tests/)
 
-**ResearchLens** is an enterprise-grade, latency-aware, retrieval-quality-aware Retrieval-Augmented Generation (RAG) platform. Rather than naively executing an expensive vector-search and cross-encoder cascade on every query, ResearchLens implements an **adaptive, filter-aware, hybrid, confidence-gated pipeline** engineered for strict latency budgets (P50, P95, P99), compute efficiency, and high retrieval precision.
+**Production-oriented Adaptive RAG** is an enterprise-grade, latency-aware, retrieval-quality-aware Retrieval-Augmented Generation (RAG) platform. Rather than naively executing an expensive vector-search and cross-encoder cascade on every query, Production-oriented Adaptive RAG implements an **adaptive, filter-aware, hybrid, confidence-gated pipeline** engineered for strict latency budgets (P50, P95, P99), compute efficiency, and high retrieval precision.
 
 ### Core Architectural Principle
 ```
@@ -98,7 +98,7 @@ CHEAP RETRIEVAL
 ## Architectural Highlights & Engineering Deep-Dive
 
 ### 1. First-Class Metadata Filtering (`RetrievalFilter`)
-Naive RAG systems either post-filter retrieved candidates (starving top-$k$ results) or enumerate matching document IDs in Python and pass thousands of IDs into vector queries. ResearchLens introduces `RetrievalFilter` and `QueryConstraints`:
+Naive RAG systems either post-filter retrieved candidates (starving top-$k$ results) or enumerate matching document IDs in Python and pass thousands of IDs into vector queries. Production-oriented Adaptive RAG introduces `RetrievalFilter` and `QueryConstraints`:
 - **Hard Filters**: Deterministic constraints (`eq`, `in`, `range`, `prefix`) compiled into native Qdrant `models.Filter` payload queries.
 - **BM25 Native Pre-Filtering**: Lexical search candidate indices are narrowed *before* computing BM25 term frequency scores, cutting search latency by up to **75%** on selective queries.
 - **Soft Preferences & Hints**: Direct scoring adjustments and exact term extraction for technical codes and identifiers.
@@ -117,7 +117,7 @@ Payload schema indices are created during startup across high-cardinality fields
 Index creation is idempotent, version-tracked, and safe for both embedded and remote cluster deployments.
 
 ### 3. Evidence-Based Confidence Estimation & Conditional Reranking
-Unconditional cross-encoder reranking is the #1 latency bottleneck in production RAG systems (adding 400ms–2700ms per query). ResearchLens evaluates retrieval confidence using measurable statistical signals:
+Unconditional cross-encoder reranking is the #1 latency bottleneck in production RAG systems (adding 400ms–2700ms per query). Production-oriented Adaptive RAG evaluates retrieval confidence using measurable statistical signals:
 $$\text{Confidence} = w_1 \cdot \text{Agreement}_{\text{dense,bm25}} + w_2 \cdot \text{Margin}_{\text{top1}-\text{top2}} + w_3 \cdot \text{ExactIdMatches} + w_4 \cdot \text{TermCoverage}$$
 
 **Decision Policy:**
@@ -126,7 +126,7 @@ $$\text{Confidence} = w_1 \cdot \text{Agreement}_{\text{dense,bm25}} + w_2 \cdot
 - $< 0.60$: **Escalate & expand**. Escalate to deep route with multi-query decomposition.
 
 ### 4. Controlled Late Parent Expansion
-Parent-child chunking indexes child passages (150–300 tokens) for sharp retrieval precision. However, naive parent expansion balloons context windows and wastes tokens. ResearchLens executes **controlled late expansion**:
+Parent-child chunking indexes child passages (150–300 tokens) for sharp retrieval precision. However, naive parent expansion balloons context windows and wastes tokens. Production-oriented Adaptive RAG executes **controlled late expansion**:
 - Expansion applies **only** to the top reranked chunks.
 - Strict limit: `max_parent_expansions = 3`.
 - Token budget cap: `max_parent_tokens = 1200`.
@@ -145,6 +145,15 @@ Configurable via `FUSION_METHOD`:
 
 ---
 
+
+---
+
+## Default Models Configuration
+
+*   **Dense Embedding Model:** sentence-transformers/all-MiniLM-L6-v2 (Configured for 200-token chunks with 30-token overlap to completely eliminate 256-token context truncation).
+*   **Reranker Model:** BAAI/bge-reranker-large (Domain-agnostic, robust, and highly capable).
+*   **Hybrid Rank Fusion:** Weighted Reciprocal Rank Fusion (RRF) with α=0.85, heavily prioritizing BM25 keyword precision while leveraging dense vectors as a semantic tie-breaker.
+
 ## Benchmark & Empirical Evaluation
 
 All benchmarks are measured directly on the codebase using real chunking, indexing, Qdrant vector retrieval, BM25 scoring, and cross-encoders.
@@ -154,7 +163,7 @@ Executed across 11 diverse evaluation categories (`exact`, `conceptual`, `proced
 
 ```text
 ---------------------------------------------------------------------------
-ResearchLens — Benchmark Evaluation Report [Mode: ADAPTIVE]
+Production-oriented Adaptive RAG — Benchmark Evaluation Report [Mode: ADAPTIVE]
 ---------------------------------------------------------------------------
 Total Test Cases      : 110
 MRR (Mean Reciprocal) : 0.6949
@@ -346,7 +355,7 @@ docker-compose up --build -d
 ```
 Boots:
 1. **Standalone Qdrant Vector DB** at port `6333`.
-2. **ResearchLens FastAPI API Server** at port `8000`.
+2. **Production-oriented Adaptive RAG FastAPI API Server** at port `8000`.
 
 ---
 
