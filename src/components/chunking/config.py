@@ -22,7 +22,7 @@ class ChunkingConfig:
     """Configuration for chunking pipeline and specialized chunkers."""
 
     # Default size in approx tokens (or characters / 4)
-    chunk_size: int = 400
+    chunk_size: int = 200
     chunk_overlap: int = 50
     min_chunk_size: int = 30
 

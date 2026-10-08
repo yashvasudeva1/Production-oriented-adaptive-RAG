@@ -44,7 +44,15 @@ def reciprocal_rank_fusion(
     dense_scores: Dict[str, float] = {}
     keyword_scores: Dict[str, float] = {}
 
-    list_weights = list(weights) if weights else [1.0] * len(candidate_lists)
+    if weights:
+        list_weights = list(weights)
+    elif len(candidate_lists) == 2:
+        # Weighted RRF: alpha heavily favors BM25
+        # candidate_lists[0] is assumed Dense, candidate_lists[1] is assumed BM25
+        alpha = 0.8
+        list_weights = [1.0 - alpha, alpha]
+    else:
+        list_weights = [1.0] * len(candidate_lists)
 
     for cand_list, w in zip(candidate_lists, list_weights):
         for rank, cand in enumerate(cand_list, start=1):
