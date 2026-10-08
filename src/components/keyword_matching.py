@@ -387,24 +387,41 @@ class BM25Retriever:
 
     def _candidate_indices(
         self,
-        candidate_document_ids: Sequence[str] | None,
+        candidate_document_ids: Sequence[str] | None = None,
+        metadata_filter: Any | None = None,
     ) -> list[int]:
-        """Return chunk indices belonging to candidate documents."""
+        """Return chunk indices matching candidate documents and structured metadata filter constraints."""
+        candidate_set = None
+        if candidate_document_ids:
+            clean = {str(d).strip() for d in candidate_document_ids if str(d).strip()}
+            if clean:
+                candidate_set = clean
 
-        if not candidate_document_ids:
+        filter_obj = None
+        if metadata_filter is not None:
+            if hasattr(metadata_filter, "matches_chunk"):
+                filter_obj = metadata_filter
+            elif isinstance(metadata_filter, dict):
+                try:
+                    from .retrieval.filters import RetrievalFilter
+                    filter_obj = RetrievalFilter.from_dict(metadata_filter)
+                except Exception:
+                    filter_obj = None
+
+        if not candidate_set and filter_obj is None:
             return list(range(len(self._chunks)))
 
-        candidate_set = {
-            str(document_id)
-            for document_id in candidate_document_ids
-            if str(document_id).strip()
-        }
+        matching_indices: list[int] = []
+        for index, chunk in enumerate(self._chunks):
+            if candidate_set is not None:
+                if chunk.get("document_id") not in candidate_set:
+                    continue
+            if filter_obj is not None:
+                if not filter_obj.matches_chunk(chunk):
+                    continue
+            matching_indices.append(index)
 
-        return [
-            index
-            for index, chunk in enumerate(self._chunks)
-            if chunk["document_id"] in candidate_set
-        ]
+        return matching_indices
 
     # Retrieval
 
@@ -414,6 +431,7 @@ class BM25Retriever:
         *,
         candidate_document_ids: Sequence[str] | None = None,
         retrieval_signals: Mapping[str, Any] | None = None,
+        metadata_filter: Any | None = None,
         top_k: int | None = None,
     ) -> BM25RetrievalResponse:
         """
@@ -425,12 +443,13 @@ class BM25Retriever:
             Original user query.
 
         candidate_document_ids:
-            Document IDs returned by MetadataFilter. When omitted, the full
-            chunk corpus is searched.
+            Document IDs to scope candidates. When omitted, full corpus is evaluated.
 
         retrieval_signals:
-            Optional output from MetadataFilter, e.g.
-            {"topics": ["Transformer"]}.
+            Optional output from metadata stage, e.g. {"topics": ["Transformer"]}.
+
+        metadata_filter:
+            Canonical RetrievalFilter or dict enforcing hard filters prior to lexical ranking.
 
         top_k:
             Number of chunks to return.
@@ -499,7 +518,8 @@ class BM25Retriever:
             )
 
         candidate_indices = self._candidate_indices(
-            candidate_document_ids
+            candidate_document_ids=candidate_document_ids,
+            metadata_filter=metadata_filter,
         )
 
         if not candidate_indices:

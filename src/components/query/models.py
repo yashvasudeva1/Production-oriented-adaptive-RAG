@@ -34,6 +34,7 @@ class QueryPlan(BaseModel):
     sub_queries: List[str] = Field(default_factory=list)
     candidate_document_ids: List[str] = Field(default_factory=list)
     metadata_filters: Dict[str, Any] = Field(default_factory=dict)
+    retrieval_filter: Optional[Any] = None
     retrieval_signals: Dict[str, Any] = Field(default_factory=dict)
 
     requires_dense: bool = True
@@ -51,7 +52,9 @@ class QueryPlan(BaseModel):
     top_k_dense: int = 10
     top_k_keyword: int = 10
     rerank_top_k: int = 5
+    max_parents: int = 3
+    max_parent_tokens: int = 1200
     context_budget: int = 2048
 
-    confidence: float = 0.90
+    confidence: float = 0.85
     reasoning: str = ""

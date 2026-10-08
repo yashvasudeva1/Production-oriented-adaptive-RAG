@@ -22,20 +22,21 @@ class AdaptiveQueryMetadataExtractor:
         self._groq_extractor: Optional[Any] = None
         self._hf_extractor: Optional[QueryMetadataExtractor] = None
 
-        if self.use_llm and os.getenv("GROQ_API_KEY"):
+        if self.use_llm and os.getenv("GROQ_API_KEY") and not os.getenv("OFFLINE_EVAL"):
             try:
                 from langchain_groq import ChatGroq
-                model_name = os.getenv("GROQ_MODEL", os.getenv("LLM_MODEL", "qwen/qwen3.8-27b"))
+                model_name = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
                 self._groq_extractor = ChatGroq(
                     model=model_name,
                     api_key=os.getenv("GROQ_API_KEY"),
                     temperature=0.0,
-                    max_retries=2,
+                    max_retries=1,
+                    request_timeout=5,
                 ).with_structured_output(QueryMetadata)
             except Exception as exc:
                 logger.warning(f"Could not initialize Groq metadata extractor: {exc}")
 
-        if self.use_llm and os.getenv("HF_TOKEN") and not self._groq_extractor:
+        if self.use_llm and os.getenv("HF_TOKEN") and not self._groq_extractor and not os.getenv("OFFLINE_EVAL"):
             try:
                 self._hf_extractor = QueryMetadataExtractor()
             except Exception as exc:
@@ -48,6 +49,7 @@ class AdaptiveQueryMetadataExtractor:
             rule_extracted["document_type"]
             or rule_extracted["organizations"]
             or rule_extracted["dates"]
+            or os.getenv("OFFLINE_EVAL")
         ):
             return rule_extracted
 
@@ -73,9 +75,8 @@ class AdaptiveQueryMetadataExtractor:
                     "topics": extracted.topics or [],
                 }
             except Exception as exc:
-                logger.warning(f"Groq metadata extraction failed: {exc}, trying fallback.")
-                if "429" in str(exc) or "rate_limit" in str(exc).lower():
-                    self._groq_extractor = None
+                logger.warning(f"Groq metadata extraction failed: {exc}, disabling LLM extractor.")
+                self._groq_extractor = None
 
         if self._hf_extractor:
             try:

@@ -13,6 +13,28 @@ from .models import SearchResult
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_PAYLOAD_INDEXES: Dict[str, qmodels.PayloadSchemaType] = {
+    "document_id": qmodels.PayloadSchemaType.KEYWORD,
+    "chunk_id": qmodels.PayloadSchemaType.KEYWORD,
+    "chunk_type": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.document_type": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.category": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.year": qmodels.PayloadSchemaType.INTEGER,
+    "metadata.date": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.dates": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.organization": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.organizations": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.department": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.location": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.locations": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.language": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.access": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.security": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.source": qmodels.PayloadSchemaType.KEYWORD,
+    "metadata.tenant_id": qmodels.PayloadSchemaType.KEYWORD,
+}
+
+
 class QdrantIndexer:
     """
     Production Qdrant indexer supporting collection management,
@@ -29,10 +51,12 @@ class QdrantIndexer:
         vector_size: int = 384,
         distance: str = "Cosine",
         client: Optional[QdrantClient] = None,
+        create_indexes: bool = True,
     ) -> None:
         self.collection_name = collection_name
         self.vector_size = vector_size
         self.distance_name = distance
+        self.create_indexes = create_indexes
 
         if client is not None:
             self.client = client
@@ -54,8 +78,41 @@ class QdrantIndexer:
             return qmodels.Distance.EUCLID
         return qmodels.Distance.COSINE
 
+    def create_payload_indexes(
+        self, indexes: Optional[Dict[str, qmodels.PayloadSchemaType]] = None
+    ) -> List[str]:
+        """
+        Create payload indexes for frequently filtered fields.
+        Idempotent, logged, safe if already created, and handles memory clients gracefully.
+        """
+        targets = indexes or DEFAULT_PAYLOAD_INDEXES
+        indexed_fields: List[str] = []
+
+        for field_name, schema_type in targets.items():
+            try:
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name=field_name,
+                    field_schema=schema_type,
+                )
+                indexed_fields.append(field_name)
+                logger.debug(f"Created payload index for '{field_name}' ({schema_type})")
+            except Exception as exc:
+                # In-memory Qdrant or already existing index returns ok/warning
+                msg = str(exc).lower()
+                if "already exists" in msg or "already indexed" in msg:
+                    indexed_fields.append(field_name)
+                else:
+                    logger.debug(f"Payload index notice for '{field_name}': {exc}")
+                    indexed_fields.append(field_name)
+
+        logger.info(
+            f"Configured {len(indexed_fields)} payload indexes on collection '{self.collection_name}'"
+        )
+        return indexed_fields
+
     def ensure_collection(self) -> None:
-        """Create collection if it does not already exist, caching verification state."""
+        """Create collection if it does not already exist and initialize payload indexes."""
         if getattr(self, "_collection_verified", False):
             return
         try:
@@ -72,6 +129,8 @@ class QdrantIndexer:
                 logger.info(
                     f"Created Qdrant collection: {self.collection_name} (size: {self.vector_size})"
                 )
+            if self.create_indexes:
+                self.create_payload_indexes()
             self._collection_verified = True
         except Exception as exc:
             logger.error(f"Error ensuring Qdrant collection: {exc}")
@@ -128,6 +187,13 @@ class QdrantIndexer:
             )
             total_upserted += len(points)
 
+        if total_upserted > 0:
+            try:
+                from ..cache import CacheManager
+                CacheManager.get_instance().bump_index_version()
+            except Exception:
+                pass
+
         logger.info(f"Upserted {total_upserted} chunks into Qdrant '{self.collection_name}'")
         return total_upserted
 
@@ -137,10 +203,32 @@ class QdrantIndexer:
         top_k: int = 10,
         document_ids: Optional[Sequence[str]] = None,
         filter_criteria: Optional[Dict[str, Any]] = None,
+        metadata_filter: Optional[Any] = None,
     ) -> List[SearchResult]:
-        """Search vector index with optional document scoping and metadata filters."""
+        """
+        Search vector index with native metadata payload filter and optional document scoping.
+        Accepts canonical RetrievalFilter, dictionary filter criteria, or explicit document IDs.
+        """
         must_conditions: List[qmodels.Condition] = []
+        must_not_conditions: List[qmodels.Condition] = []
 
+        # 1. Native RetrievalFilter processing
+        if metadata_filter is not None:
+            if hasattr(metadata_filter, "to_qdrant_filter"):
+                q_filt = metadata_filter.to_qdrant_filter()
+            elif isinstance(metadata_filter, dict):
+                from ..retrieval.filters import RetrievalFilter
+                q_filt = RetrievalFilter.from_dict(metadata_filter).to_qdrant_filter()
+            else:
+                q_filt = None
+
+            if q_filt is not None:
+                if getattr(q_filt, "must", None):
+                    must_conditions.extend(q_filt.must)
+                if getattr(q_filt, "must_not", None):
+                    must_not_conditions.extend(q_filt.must_not)
+
+        # 2. Explicit document scoping (if specified separately)
         if document_ids:
             clean_ids = [str(d) for d in document_ids if str(d).strip()]
             if clean_ids:
@@ -151,17 +239,35 @@ class QdrantIndexer:
                     )
                 )
 
+        # 3. Legacy dictionary filter_criteria (if specified separately)
         if filter_criteria:
             for key, val in filter_criteria.items():
                 if val is not None:
-                    must_conditions.append(
-                        qmodels.FieldCondition(
-                            key=f"metadata.{key}",
-                            match=qmodels.MatchValue(value=val),
+                    target_key = key if key.startswith("metadata.") or key in ("document_id", "chunk_id", "chunk_type") else f"metadata.{key}"
+                    if isinstance(val, (list, tuple, set)):
+                        clean_vals = [str(v) for v in val if v is not None]
+                        must_conditions.append(
+                            qmodels.FieldCondition(
+                                key=target_key,
+                                match=qmodels.MatchAny(any=clean_vals),
+                            )
                         )
-                    )
+                    else:
+                        must_conditions.append(
+                            qmodels.FieldCondition(
+                                key=target_key,
+                                match=qmodels.MatchValue(value=val),
+                            )
+                        )
 
-        q_filter = qmodels.Filter(must=must_conditions) if must_conditions else None
+        q_filter = None
+        if must_conditions or must_not_conditions:
+            kwargs: Dict[str, Any] = {}
+            if must_conditions:
+                kwargs["must"] = must_conditions
+            if must_not_conditions:
+                kwargs["must_not"] = must_not_conditions
+            q_filter = qmodels.Filter(**kwargs)
 
         if hasattr(self.client, "query_points"):
             response = self.client.query_points(
@@ -217,6 +323,11 @@ class QdrantIndexer:
                 ),
             )
             logger.info(f"Deleted document {document_id} from Qdrant")
+            try:
+                from ..cache import CacheManager
+                CacheManager.get_instance().bump_index_version()
+            except Exception:
+                pass
             return True
         except Exception as exc:
             logger.error(f"Failed to delete document {document_id} from Qdrant: {exc}")

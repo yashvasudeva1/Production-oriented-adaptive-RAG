@@ -89,7 +89,15 @@ class BM25Indexer:
         self._all_chunks = list(chunk_dict_map.values())
         self._save_disk_chunks()
         self.retriever.build_from_chunks(self._all_chunks)
+        try:
+            from ..cache import CacheManager
+            CacheManager.get_instance().bump_index_version()
+        except Exception:
+            pass
         return len(chunks)
+
+    # Alias for backward compatibility
+    index_chunks = upsert_chunks
 
     def delete_by_document_id(self, document_id: str) -> bool:
         """Remove all chunks associated with document_id."""
@@ -100,6 +108,11 @@ class BM25Indexer:
         if len(self._all_chunks) != initial_len:
             self._save_disk_chunks()
             self.retriever.build_from_chunks(self._all_chunks)
+            try:
+                from ..cache import CacheManager
+                CacheManager.get_instance().bump_index_version()
+            except Exception:
+                pass
             return True
         return False
 
@@ -109,12 +122,14 @@ class BM25Indexer:
         top_k: int = 10,
         candidate_document_ids: Optional[Sequence[str]] = None,
         retrieval_signals: Optional[Dict[str, Any]] = None,
+        metadata_filter: Optional[Any] = None,
     ) -> List[SearchResult]:
-        """Execute BM25 keyword search and return unified SearchResult objects."""
+        """Execute BM25 keyword search with metadata pre-filtering and return unified SearchResult objects."""
         resp = self.retriever.retrieve(
             query=query,
             candidate_document_ids=candidate_document_ids,
             retrieval_signals=retrieval_signals,
+            metadata_filter=metadata_filter,
             top_k=top_k,
         )
 

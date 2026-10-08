@@ -40,6 +40,7 @@ class KeywordRetriever:
         *,
         candidate_document_ids: Optional[Sequence[str]] = None,
         retrieval_signals: Optional[Dict[str, Any]] = None,
+        metadata_filter: Optional[Any] = None,
         top_k: Optional[int] = None,
     ) -> KeywordRetrievalResponse:
         query = str(query or "").strip()
@@ -60,6 +61,7 @@ class KeywordRetriever:
             top_k=k,
             candidate_document_ids=candidate_document_ids,
             retrieval_signals=retrieval_signals,
+            metadata_filter=metadata_filter,
         )
 
         return KeywordRetrievalResponse(
@@ -69,3 +71,22 @@ class KeywordRetriever:
             candidate_document_ids=list(candidate_document_ids or []),
             results=results,
         )
+
+
+def keyword_retrieve(
+    query: str,
+    metadata_filter: Optional[Any] = None,
+    top_k: int = 10,
+    candidate_document_ids: Optional[Sequence[str]] = None,
+    retrieval_signals: Optional[Dict[str, Any]] = None,
+    indexer: Optional[BM25Indexer] = None,
+) -> KeywordRetrievalResponse:
+    """Canonical functional interface for keyword retrieval."""
+    retriever = KeywordRetriever(indexer=indexer, default_top_k=top_k)
+    return retriever.retrieve(
+        query=query,
+        candidate_document_ids=candidate_document_ids,
+        retrieval_signals=retrieval_signals,
+        metadata_filter=metadata_filter,
+        top_k=top_k,
+    )

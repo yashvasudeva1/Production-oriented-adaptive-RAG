@@ -57,6 +57,7 @@ class DenseRetriever:
         *,
         candidate_document_ids: Optional[Sequence[str]] = None,
         filter_criteria: Optional[Dict[str, Any]] = None,
+        metadata_filter: Optional[Any] = None,
         top_k: Optional[int] = None,
     ) -> DenseRetrievalResponse:
         query = str(query or "").strip()
@@ -78,6 +79,7 @@ class DenseRetriever:
             top_k=k,
             document_ids=candidate_document_ids,
             filter_criteria=filter_criteria,
+            metadata_filter=metadata_filter,
         )
 
         results: List[DenseResult] = []
@@ -104,3 +106,21 @@ class DenseRetriever:
             candidate_document_ids=list(candidate_document_ids or []),
             results=results,
         )
+
+
+def dense_retrieve(
+    query: str,
+    metadata_filter: Optional[Any] = None,
+    top_k: int = 10,
+    candidate_document_ids: Optional[Sequence[str]] = None,
+    indexer: Optional[QdrantIndexer] = None,
+    embedder: Optional[BaseEmbedder] = None,
+) -> DenseRetrievalResponse:
+    """Canonical function interface for dense retrieval."""
+    retriever = DenseRetriever(indexer=indexer, embedder=embedder, default_top_k=top_k)
+    return retriever.retrieve(
+        query=query,
+        metadata_filter=metadata_filter,
+        candidate_document_ids=candidate_document_ids,
+        top_k=top_k,
+    )

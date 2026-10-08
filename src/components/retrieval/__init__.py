@@ -1,6 +1,13 @@
 from .confidence import RetrievalConfidence, RetrievalConfidenceScorer
 from .dense import DenseResult, DenseRetrievalResponse, DenseRetriever
-from .fusion import UnifiedCandidate, reciprocal_rank_fusion
+from .filters import FilterCondition, QueryConstraints, RetrievalFilter
+from .fusion import (
+    UnifiedCandidate,
+    fuse_candidates,
+    reciprocal_rank_fusion,
+    score_normalized_fusion,
+    weighted_rrf,
+)
 from .hybrid import HybridRetrievalResponse, HybridRetriever
 from .keyword import KeywordRetrievalResponse, KeywordRetriever
 from .multi_query import MultiQueryRetrievalResponse, MultiQueryRetriever
@@ -21,6 +28,12 @@ __all__ = [
     "MultiQueryRetriever",
     "UnifiedCandidate",
     "reciprocal_rank_fusion",
+    "weighted_rrf",
+    "score_normalized_fusion",
+    "fuse_candidates",
     "RetrievalConfidence",
     "RetrievalConfidenceScorer",
+    "RetrievalFilter",
+    "FilterCondition",
+    "QueryConstraints",
 ]

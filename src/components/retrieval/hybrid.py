@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from pydantic import BaseModel, Field
 
 from .dense import DenseRetriever
-from .fusion import UnifiedCandidate, reciprocal_rank_fusion
+from .fusion import UnifiedCandidate, fuse_candidates, reciprocal_rank_fusion
 from .keyword import KeywordRetriever
 from ..indexing.bm25_indexer import BM25Indexer
 from ..indexing.models import SearchResult
@@ -36,7 +36,8 @@ class HybridRetriever:
     """
     Parallel hybrid retriever combining vector dense search (Qdrant)
     and lexical keyword search (BM25) concurrently using a thread pool.
-    Fuses results via Reciprocal Rank Fusion (RRF) with full provenance retention.
+    Fuses results via configurable rank fusion (RRF, weighted RRF, score normalized)
+    with full provenance retention.
     """
 
     def __init__(
@@ -45,11 +46,13 @@ class HybridRetriever:
         keyword_retriever: Optional[KeywordRetriever] = None,
         default_top_k: int = 10,
         rrf_k: int = 60,
+        fusion_method: str = "rrf",
     ) -> None:
         self.dense_retriever = dense_retriever or DenseRetriever()
         self.keyword_retriever = keyword_retriever or KeywordRetriever()
         self.default_top_k = default_top_k
         self.rrf_k = rrf_k
+        self.fusion_method = fusion_method
 
     def retrieve(
         self,
@@ -57,9 +60,12 @@ class HybridRetriever:
         *,
         candidate_document_ids: Optional[Sequence[str]] = None,
         filter_criteria: Optional[Dict[str, Any]] = None,
+        metadata_filter: Optional[Any] = None,
         retrieval_signals: Optional[Dict[str, Any]] = None,
         top_k: Optional[int] = None,
         parallel: bool = True,
+        fusion_method: Optional[str] = None,
+        weights: Optional[Sequence[float]] = None,
     ) -> HybridRetrievalResponse:
         query = str(query or "").strip()
         k = top_k or self.default_top_k
@@ -84,6 +90,7 @@ class HybridRetriever:
                 query=query,
                 candidate_document_ids=candidate_document_ids,
                 filter_criteria=filter_criteria,
+                metadata_filter=metadata_filter,
                 top_k=k,
             )
             lat = (time.perf_counter() - t0) * 1000
@@ -111,6 +118,7 @@ class HybridRetriever:
                 query=query,
                 candidate_document_ids=candidate_document_ids,
                 retrieval_signals=retrieval_signals,
+                metadata_filter=metadata_filter,
                 top_k=k,
             )
             lat = (time.perf_counter() - t0) * 1000
@@ -128,10 +136,13 @@ class HybridRetriever:
             dense_results, dense_latency = _run_dense()
             keyword_results, keyword_latency = _run_keyword()
 
-        # Fuse rankings using Reciprocal Rank Fusion
+        # Fuse rankings using configurable rank fusion strategy
         t_fuse = time.perf_counter()
-        fused = reciprocal_rank_fusion(
+        active_method = fusion_method or self.fusion_method
+        fused = fuse_candidates(
             [dense_results, keyword_results],
+            method=active_method,
+            weights=weights,
             k=self.rrf_k,
             top_n=k,
         )
