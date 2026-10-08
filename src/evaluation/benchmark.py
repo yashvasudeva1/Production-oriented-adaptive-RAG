@@ -3,10 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
+import os
 import sys
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
+
+os.environ.setdefault("OFFLINE_EVAL", "1")
 
 from ..components.orchestration import RAGOrchestrator
 from ..components.registry import SystemRegistry
@@ -30,6 +34,8 @@ class BenchmarkReport:
     mrr: float = 0.0
     recall_at_k: float = 0.0
     precision_at_k: float = 0.0
+    ndcg_at_k: float = 0.0
+    hit_rate_at_k: float = 0.0
     abstention_accuracy: float = 0.0
     citation_accuracy: float = 0.0
     avg_latency_ms: float = 0.0
@@ -64,6 +70,22 @@ def _compute_percentile(values: List[float], p: float) -> float:
     idx_ceil = min(idx_floor + 1, len(sorted_vals) - 1)
     weight = k - idx_floor
     return sorted_vals[idx_floor] + weight * (sorted_vals[idx_ceil] - sorted_vals[idx_floor])
+
+
+def compute_ndcg_at_k(relevance_scores: List[float], k: int = 5) -> float:
+    """
+    Compute Normalized Discounted Cumulative Gain at rank K.
+    Supports binary (1/0) or graded relevance.
+    """
+    if not relevance_scores:
+        return 0.0
+    k_scores = relevance_scores[:k]
+    dcg = sum((rel / math.log2(idx + 1)) for idx, rel in enumerate(k_scores, start=1))
+    ideal_scores = sorted(relevance_scores, reverse=True)[:k]
+    idcg = sum((rel / math.log2(idx + 1)) for idx, rel in enumerate(ideal_scores, start=1))
+    if idcg <= 0.0:
+        return 0.0
+    return dcg / idcg
 
 
 def run_benchmark(
@@ -120,6 +142,8 @@ def run_benchmark(
     reciprocal_ranks: List[float] = []
     recalls: List[float] = []
     precisions: List[float] = []
+    ndcgs: List[float] = []
+    hit_rates: List[float] = []
     abstention_correct = 0
     citation_valid_count = 0
     answerable_count = 0
@@ -137,6 +161,8 @@ def run_benchmark(
     cat_recalls: Dict[str, List[float]] = {}
     cat_precisions: Dict[str, List[float]] = {}
     cat_mrr: Dict[str, List[float]] = {}
+    cat_ndcg: Dict[str, List[float]] = {}
+    cat_hit_rate: Dict[str, List[float]] = {}
     cat_abstention: Dict[str, List[int]] = {}
     cat_citations: Dict[str, List[int]] = {}
     cat_latencies: Dict[str, List[float]] = {}
@@ -173,6 +199,8 @@ def run_benchmark(
             cat_recalls[cat] = []
             cat_precisions[cat] = []
             cat_mrr[cat] = []
+            cat_ndcg[cat] = []
+            cat_hit_rate[cat] = []
             cat_abstention[cat] = []
             cat_citations[cat] = []
             cat_latencies[cat] = []
@@ -211,8 +239,24 @@ def run_benchmark(
 
             first_rank = None
             hits_count = 0
+            rel_scores: List[float] = []
+
             for rank, chunk_text in enumerate(retrieved_texts, start=1):
-                if any(kw.lower() in chunk_text for kw in case.expected_doc_keywords):
+                src = resp.sources[rank - 1] if rank - 1 < len(resp.sources) else {}
+                kw_match = any(kw.lower() in chunk_text for kw in case.expected_doc_keywords)
+                doc_match = bool(
+                    getattr(case, "expected_document_ids", None)
+                    and any(str(did).lower() == str(src.get("document_id", "")).lower() for did in case.expected_document_ids)
+                )
+                chk_match = bool(
+                    getattr(case, "expected_chunk_ids", None)
+                    and any(str(cid).lower() == str(src.get("chunk_id", "")).lower() for cid in case.expected_chunk_ids)
+                )
+
+                is_hit = kw_match or doc_match or chk_match
+                rel_scores.append(1.0 if is_hit else 0.0)
+
+                if is_hit:
                     hits_count += 1
                     if first_rank is None:
                         first_rank = rank
@@ -220,14 +264,20 @@ def run_benchmark(
             rr = 1.0 / first_rank if first_rank is not None else 0.0
             rec = 1.0 if hits_count > 0 else 0.0
             prec = hits_count / max(1, len(retrieved_texts))
+            ndcg = compute_ndcg_at_k(rel_scores, k=top_k)
+            hit_rate = 1.0 if any(r > 0 for r in rel_scores[:top_k]) else 0.0
 
             reciprocal_ranks.append(rr)
             recalls.append(rec)
             precisions.append(prec)
+            ndcgs.append(ndcg)
+            hit_rates.append(hit_rate)
 
             cat_mrr[cat].append(rr)
             cat_recalls[cat].append(rec)
             cat_precisions[cat].append(prec)
+            cat_ndcg[cat].append(ndcg)
+            cat_hit_rate[cat].append(hit_rate)
 
             # Citation validation
             val = resp.citation_validation
@@ -259,6 +309,8 @@ def run_benchmark(
     report.mrr = sum(reciprocal_ranks) / max(1, len(reciprocal_ranks))
     report.recall_at_k = sum(recalls) / max(1, len(recalls))
     report.precision_at_k = sum(precisions) / max(1, len(precisions))
+    report.ndcg_at_k = sum(ndcgs) / max(1, len(ndcgs))
+    report.hit_rate_at_k = sum(hit_rates) / max(1, len(hit_rates))
     report.abstention_accuracy = abstention_correct / n
     report.citation_accuracy = citation_valid_count / max(1, answerable_count)
 
@@ -315,6 +367,8 @@ def print_report(rep: BenchmarkReport, mode_label: str = "adaptive") -> None:
     print(f"MRR (Mean Reciprocal) : {rep.mrr:.4f}")
     print(f"Recall@K              : {rep.recall_at_k:.4f}")
     print(f"Precision@K           : {rep.precision_at_k:.4f}")
+    print(f"Hit Rate@K            : {rep.hit_rate_at_k * 100:.1f}%")
+    print(f"nDCG@K                : {rep.ndcg_at_k:.4f}")
     print(f"Abstention Accuracy   : {rep.abstention_accuracy * 100:.1f}%")
     print(f"Citation Accuracy     : {rep.citation_accuracy * 100:.1f}%")
     print("-" * 75)

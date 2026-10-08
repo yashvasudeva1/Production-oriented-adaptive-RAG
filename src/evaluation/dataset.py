@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -13,6 +13,10 @@ class EvalCase:
     query_type: str
     answerable: bool
     description: str
+    expected_document_ids: List[str] = field(default_factory=list)
+    expected_chunk_ids: List[str] = field(default_factory=list)
+    metadata_constraints: Dict[str, Any] = field(default_factory=dict)
+    hard_filter: Optional[Any] = None
 
 
 EVALUATION_DATASET: List[EvalCase] = [
