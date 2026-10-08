@@ -14,6 +14,10 @@ from .signals import QuerySignals, extract_query_signals
 
 logger = logging.getLogger(__name__)
 
+# Confidence levels that allow a metadata field to be applied as a hard filter.
+# "low" confidence fields are always downgraded to soft retrieval hints.
+_HARD_FILTER_MIN_CONFIDENCE = {"high", "medium"}
+
 
 class QueryPlanner:
     """
@@ -22,6 +26,11 @@ class QueryPlanner:
     - Level 0: Query Normalization
     - Level 1: Deterministic Query Signals (sub-millisecond)
     - Level 2: Execution Mode Routing (FAST, BALANCED, DEEP)
+
+    Filter philosophy:
+      Only EXPLICIT or HIGH-CONFIDENCE metadata constraints become hard filters.
+      Heuristic / rule-based inference at LOW confidence is always downgraded to
+      soft retrieval hints that influence ranking but never eliminate candidates.
     """
 
     def __init__(
@@ -73,26 +82,81 @@ class QueryPlanner:
         if candidate_ids:
             retrieval_filter.document_ids = list(candidate_ids)
 
-        # Run metadata filtering when constraints are detected
+        # Run metadata extraction and build canonical hard/soft filters
         if self.metadata_extractor:
             extracted_meta = self.metadata_extractor.extract(norm_query)
+            field_confidence: Dict[str, str] = extracted_meta.get("_confidence", {})
 
-            # Build canonical hard filters directly on metadata fields
-            if extracted_meta.get("document_type"):
+            def _is_hard(field: str) -> bool:
+                """Return True only if the field has sufficient confidence for a hard filter."""
+                conf = field_confidence.get(field, "low")
+                return conf in _HARD_FILTER_MIN_CONFIDENCE
+
+            # document_type → hard filter only if high/medium confidence
+            if extracted_meta.get("document_type") and _is_hard("document_type"):
                 retrieval_filter.add_hard_filter("document_type", extracted_meta["document_type"])
-            if extracted_meta.get("department"):
-                retrieval_filter.add_hard_filter("department", extracted_meta["department"])
-            if extracted_meta.get("organizations"):
-                orgs = extracted_meta["organizations"]
-                retrieval_filter.add_hard_filter("organizations", orgs if isinstance(orgs, list) else [orgs], operator="in")
-            if extracted_meta.get("dates"):
-                dts = extracted_meta["dates"]
-                retrieval_filter.add_hard_filter("dates", dts if isinstance(dts, list) else [dts], operator="in")
-            if extracted_meta.get("locations"):
-                locs = extracted_meta["locations"]
-                retrieval_filter.add_hard_filter("locations", locs if isinstance(locs, list) else [locs], operator="in")
+                logger.debug(
+                    f"[planner] Hard filter: document_type={extracted_meta['document_type']} "
+                    f"(conf={field_confidence.get('document_type', 'low')})"
+                )
+            elif extracted_meta.get("document_type"):
+                # Low-confidence document_type → soft hint only
+                logger.debug(
+                    f"[planner] Soft hint: document_type={extracted_meta['document_type']} "
+                    f"(conf={field_confidence.get('document_type', 'low')}) — not applied as hard filter"
+                )
 
-            # Soft preferences / retrieval hints
+            # department → always high confidence if present
+            if extracted_meta.get("department") and _is_hard("department"):
+                retrieval_filter.add_hard_filter("department", extracted_meta["department"])
+
+            # organizations → hard filter only if confidence is sufficient
+            if extracted_meta.get("organizations") and _is_hard("organizations"):
+                orgs = extracted_meta["organizations"]
+                retrieval_filter.add_hard_filter(
+                    "organizations",
+                    orgs if isinstance(orgs, list) else [orgs],
+                    operator="in",
+                )
+                logger.debug(
+                    f"[planner] Hard filter: organizations={orgs} "
+                    f"(conf={field_confidence.get('organizations', 'low')})"
+                )
+            elif extracted_meta.get("organizations"):
+                logger.debug(
+                    f"[planner] Soft hint: organizations={extracted_meta['organizations']} "
+                    f"(conf={field_confidence.get('organizations', 'low')}) — not applied as hard filter"
+                )
+
+            # dates → hard filter only if confidence is sufficient
+            if extracted_meta.get("dates") and _is_hard("dates"):
+                dts = extracted_meta["dates"]
+                retrieval_filter.add_hard_filter(
+                    "dates",
+                    dts if isinstance(dts, list) else [dts],
+                    operator="in",
+                )
+                logger.debug(
+                    f"[planner] Hard filter: dates={dts} "
+                    f"(conf={field_confidence.get('dates', 'low')})"
+                )
+            elif extracted_meta.get("dates"):
+                # Year mentioned in query context → soft retrieval hint only
+                logger.debug(
+                    f"[planner] Soft hint: dates={extracted_meta['dates']} "
+                    f"(conf={field_confidence.get('dates', 'low')}) — not applied as hard filter"
+                )
+
+            # locations → hard filter only if confidence is sufficient
+            if extracted_meta.get("locations") and _is_hard("locations"):
+                locs = extracted_meta["locations"]
+                retrieval_filter.add_hard_filter(
+                    "locations",
+                    locs if isinstance(locs, list) else [locs],
+                    operator="in",
+                )
+
+            # Soft preferences / retrieval hints (topics always go here)
             if extracted_meta.get("topics"):
                 retrieval_signals["topics"] = extracted_meta["topics"]
             if signals.exact_identifiers:
@@ -100,15 +164,17 @@ class QueryPlanner:
             if signals.quoted_phrases:
                 retrieval_filter.retrieval_hints.quoted_phrases.extend(signals.quoted_phrases)
 
-            # Legacy metadata filter compatibility for backward-compatible tests
+            # Legacy metadata filter compatibility for backward-compatible tests.
+            # Only used when there are actual hard filters already decided above
+            # AND explicit candidate IDs haven't been provided from elsewhere.
             if mode in ("balanced", "deep") and self.metadata_filter and not candidate_ids:
-                if extracted_meta.get("document_type") or extracted_meta.get("organizations") or extracted_meta.get("dates"):
+                if not retrieval_filter.is_empty() and retrieval_filter.hard_filters:
                     try:
                         qm = QueryMetadata(
-                            document_type=extracted_meta.get("document_type", ""),
-                            organizations=extracted_meta.get("organizations", []),
-                            locations=extracted_meta.get("locations", []),
-                            dates=extracted_meta.get("dates", []),
+                            document_type=extracted_meta.get("document_type", "") if _is_hard("document_type") else "",
+                            organizations=extracted_meta.get("organizations", []) if _is_hard("organizations") else [],
+                            locations=extracted_meta.get("locations", []) if _is_hard("locations") else [],
+                            dates=extracted_meta.get("dates", []) if _is_hard("dates") else [],
                             department=extracted_meta.get("department", ""),
                             topics=extracted_meta.get("topics", []),
                         )
@@ -169,7 +235,7 @@ class QueryPlanner:
             rerank_top_k = 5
             context_budget = 2048
 
-        has_meta_filter = bool(candidate_ids)
+        has_meta_filter = bool(candidate_ids) or bool(retrieval_filter.hard_filters)
         q_type: QueryType = (
             "comparison" if signals.intent == "comparison"
             else "technical_exact" if signals.intent == "technical_exact"
@@ -200,7 +266,7 @@ class QueryPlanner:
             requires_parent_child=req_parent_child,
             requires_multi_query=req_multi_query,
             requires_decomposition=req_decomposition,
-            requires_metadata_filter=has_meta_filter or not retrieval_filter.is_empty(),
+            requires_metadata_filter=has_meta_filter,
             requires_reranking=req_rerank,
             top_k=top_k,
             top_k_dense=top_k_dense,

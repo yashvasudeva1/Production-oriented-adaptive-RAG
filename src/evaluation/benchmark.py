@@ -335,21 +335,23 @@ def run_benchmark(
         report.max_latency_ms = max(latencies)
 
     # Per-category metrics
+    # FIX: unanswerable categories have no recall/precision/mrr data — default to None
+    # (previously incorrectly defaulted to 1.0, inflating category averages)
     for cat in cat_latencies:
-        cat_rec = sum(cat_recalls[cat]) / max(1, len(cat_recalls[cat])) if cat_recalls[cat] else 1.0
-        cat_prec = sum(cat_precisions[cat]) / max(1, len(cat_precisions[cat])) if cat_precisions[cat] else 1.0
-        cat_m = sum(cat_mrr[cat]) / max(1, len(cat_mrr[cat])) if cat_mrr[cat] else 1.0
+        cat_rec = sum(cat_recalls[cat]) / max(1, len(cat_recalls[cat])) if cat_recalls[cat] else None
+        cat_prec = sum(cat_precisions[cat]) / max(1, len(cat_precisions[cat])) if cat_precisions[cat] else None
+        cat_m = sum(cat_mrr[cat]) / max(1, len(cat_mrr[cat])) if cat_mrr[cat] else None
         cat_abs = sum(cat_abstention[cat]) / max(1, len(cat_abstention[cat]))
-        cat_cit = sum(cat_citations[cat]) / max(1, len(cat_citations[cat])) if cat_citations[cat] else 1.0
+        cat_cit = sum(cat_citations[cat]) / max(1, len(cat_citations[cat])) if cat_citations[cat] else None
         cat_lats = cat_latencies[cat]
 
         report.category_metrics[cat] = {
             "cases": len(cat_lats),
-            "recall_at_k": round(cat_rec, 4),
-            "precision_at_k": round(cat_prec, 4),
-            "mrr": round(cat_m, 4),
+            "recall_at_k": round(cat_rec, 4) if cat_rec is not None else None,
+            "precision_at_k": round(cat_prec, 4) if cat_prec is not None else None,
+            "mrr": round(cat_m, 4) if cat_m is not None else None,
             "abstention_accuracy": round(cat_abs, 4),
-            "citation_accuracy": round(cat_cit, 4),
+            "citation_accuracy": round(cat_cit, 4) if cat_cit is not None else None,
             "avg_latency_ms": round(sum(cat_lats) / len(cat_lats), 1),
             "p50_latency_ms": round(_compute_percentile(cat_lats, 50.0), 1),
             "p95_latency_ms": round(_compute_percentile(cat_lats, 95.0), 1),
@@ -396,10 +398,19 @@ def print_report(rep: BenchmarkReport, mode_label: str = "adaptive") -> None:
         print(f"{'Category':<15} | {'Cases':<5} | {'Recall':<6} | {'Prec':<6} | {'MRR':<6} | {'Citations':<9} | {'P50 (ms)':<8} | {'P95 (ms)':<8}")
         print("-" * 75)
         for cat, m in rep.category_metrics.items():
+            r = m['recall_at_k']
+            p = m['precision_at_k']
+            mrr = m['mrr']
+            c = m['citation_accuracy']
+            r_str = f"{r:<6.2f}" if r is not None else "N/A   "
+            p_str = f"{p:<6.2f}" if p is not None else "N/A   "
+            mrr_str = f"{mrr:<6.2f}" if mrr is not None else "N/A   "
+            c_str = f"{c * 100:<8.1f}%" if c is not None else "N/A      "
+            
             print(
-                f"{cat:<15} | {m['cases']:<5} | {m['recall_at_k']:<6.2f} | "
-                f"{m['precision_at_k']:<6.2f} | {m['mrr']:<6.2f} | "
-                f"{m['citation_accuracy'] * 100:<8.1f}% | {m['p50_latency_ms']:<8.1f} | {m['p95_latency_ms']:<8.1f}"
+                f"{cat:<15} | {m['cases']:<5} | {r_str} | "
+                f"{p_str} | {mrr_str} | "
+                f"{c_str} | {m['p50_latency_ms']:<8.1f} | {m['p95_latency_ms']:<8.1f}"
             )
         print("-" * 75)
 

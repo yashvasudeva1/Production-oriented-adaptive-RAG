@@ -141,7 +141,13 @@ def calculate_pareto_frontier(configs: Dict[str, ConfigMetrics]) -> None:
                 continue
             better_quality = (other.recall_at_k >= c.recall_at_k) and (other.mrr >= c.mrr)
             better_latency = (other.p50_latency_ms <= c.p50_latency_ms) and (other.mean_latency_ms <= c.mean_latency_ms)
-            strictly_better = (other.recall_at_k > c.recall_at_k or other.mrr > c.mrr or other.p50_latency_ms < c.p50_latency_ms)
+            # FIX: previously omitted mean_latency_ms from strictly_better
+            strictly_better = (
+                other.recall_at_k > c.recall_at_k
+                or other.mrr > c.mrr
+                or other.p50_latency_ms < c.p50_latency_ms
+                or other.mean_latency_ms < c.mean_latency_ms
+            )
             if better_quality and better_latency and strictly_better:
                 dominated = True
                 break
@@ -450,19 +456,30 @@ def run_ablation_suite(
     # -------------------------------------------------------------
     print("Evaluating Config H: Full System + Caching (Warm Deployment)...")
     lats_h, rrs_h, recs_h, precs_h, ndcgs_h = [], [], [], [], []
+    # Config H tracks its own citation/abstention metrics (not reusing G's counters)
+    abstention_hits_h = 0
+    citation_hits_h = 0
+    answerable_count_h = 0
     for c in test_cases:
         t0 = time.perf_counter()
         rag_resp = full_orchestrator.query(c.query)
         lat = (time.perf_counter() - t0) * 1000
         lats_h.append(lat)
 
+        if (c.answerable and not rag_resp.abstained) or (not c.answerable and rag_resp.abstained):
+            abstention_hits_h += 1
+
         if c.answerable:
+            answerable_count_h += 1
             texts = [(s.get("text", "") or s.get("snippet", "")) for s in rag_resp.sources]
             rr, rec, prec, ndcg = evaluate_retrieval_hits(texts, c, sources=rag_resp.sources, k=top_k)
             rrs_h.append(rr)
             recs_h.append(rec)
             precs_h.append(prec)
             ndcgs_h.append(ndcg)
+            val = rag_resp.citation_validation
+            if val.get("is_valid", False) and len(val.get("invalid_citations", [])) == 0:
+                citation_hits_h += 1
 
     suite_result.configs["H_full_cached_warm"] = ConfigMetrics(
         config_name="H. Full System + Cache [Warm]",
@@ -471,8 +488,8 @@ def run_ablation_suite(
         recall_at_k=sum(recs_h) / max(1, len(recs_h)),
         precision_at_k=sum(precs_h) / max(1, len(precs_h)),
         ndcg_at_k=sum(ndcgs_h) / max(1, len(ndcgs_h)),
-        citation_accuracy=citation_hits_g / max(1, answerable_count_g),
-        abstention_accuracy=abstention_hits_g / max(1, len(test_cases)),
+        citation_accuracy=citation_hits_h / max(1, answerable_count_h),
+        abstention_accuracy=abstention_hits_h / max(1, len(test_cases)),
         mean_latency_ms=sum(lats_h) / max(1, len(lats_h)),
         p50_latency_ms=_percentile(lats_h, 50.0),
         p95_latency_ms=_percentile(lats_h, 95.0),
