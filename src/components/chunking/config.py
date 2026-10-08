@@ -23,7 +23,7 @@ class ChunkingConfig:
 
     # Default size in approx tokens (or characters / 4)
     chunk_size: int = 200
-    chunk_overlap: int = 50
+    chunk_overlap: int = 30
     min_chunk_size: int = 30
 
     # Parent-child settings

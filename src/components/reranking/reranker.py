@@ -45,7 +45,7 @@ class CrossEncoderReranker:
 
     def __init__(
         self,
-        model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        model_name: str = "BAAI/bge-reranker-large",
         device: str = "cpu",
         default_top_k: int = 5,
         confidence_threshold: float = 0.85,

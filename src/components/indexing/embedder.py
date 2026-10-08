@@ -81,7 +81,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
 
     def __init__(
         self,
-        model_name: str = "nomic-ai/nomic-embed-text-v1.5",
+        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
         device: str = "cpu",
         batch_size: int = 32,
     ) -> None:
@@ -89,8 +89,8 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         self.device = device
         self.batch_size = batch_size
         self._model = None
-        self._dimension = 768
-        self._fallback = MockEmbedder(dim=768)
+        self._dimension = 384
+        self._fallback = MockEmbedder(dim=384)
         self._query_cache: Dict[str, List[float]] = {}
         self._max_cache_size = 512
 
@@ -99,7 +99,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
             try:
                 from sentence_transformers import SentenceTransformer
                 self._model = SentenceTransformer(
-                    self.model_name, device=self.device, trust_remote_code=True
+                    self.model_name, device=self.device
                 )
                 if hasattr(self._model, "get_embedding_dimension"):
                     self._dimension = self._model.get_embedding_dimension()

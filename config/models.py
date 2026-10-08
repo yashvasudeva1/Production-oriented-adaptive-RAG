@@ -16,7 +16,7 @@ class AppConfig:
         default_factory=lambda: os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     )
     reranker_model: str = field(
-        default_factory=lambda: os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+        default_factory=lambda: os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-large")
     )
     qdrant_url: str = field(default_factory=lambda: os.getenv("QDRANT_URL", ""))
     qdrant_collection: str = field(
@@ -25,8 +25,8 @@ class AppConfig:
     bm25_index_path: str = field(
         default_factory=lambda: os.getenv("BM25_INDEX_PATH", "metadata/chunks.json")
     )
-    chunk_size: int = field(default_factory=lambda: int(os.getenv("CHUNK_SIZE", "400")))
-    chunk_overlap: int = field(default_factory=lambda: int(os.getenv("CHUNK_OVERLAP", "50")))
+    chunk_size: int = field(default_factory=lambda: int(os.getenv("CHUNK_SIZE", "200")))
+    chunk_overlap: int = field(default_factory=lambda: int(os.getenv("CHUNK_OVERLAP", "30")))
     top_k: int = field(default_factory=lambda: int(os.getenv("TOP_K", "10")))
     dense_top_k: int = field(default_factory=lambda: int(os.getenv("DENSE_TOP_K", "10")))
     keyword_top_k: int = field(default_factory=lambda: int(os.getenv("KEYWORD_TOP_K", "10")))

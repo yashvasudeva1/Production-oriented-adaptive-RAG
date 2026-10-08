@@ -49,7 +49,7 @@ def reciprocal_rank_fusion(
     elif len(candidate_lists) == 2:
         # Weighted RRF: alpha heavily favors BM25
         # candidate_lists[0] is assumed Dense, candidate_lists[1] is assumed BM25
-        alpha = 0.8
+        alpha = 0.85
         list_weights = [1.0 - alpha, alpha]
     else:
         list_weights = [1.0] * len(candidate_lists)
