@@ -6,7 +6,7 @@ from src.components.retrieval.fusion import UnifiedCandidate
 
 
 def test_cross_encoder_reranker_dedup_and_provenance():
-    reranker = CrossEncoderReranker(default_top_k=2)
+    reranker = CrossEncoderReranker(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2", default_top_k=2)
 
     cands = [
         UnifiedCandidate(

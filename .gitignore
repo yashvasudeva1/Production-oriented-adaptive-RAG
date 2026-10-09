@@ -13,3 +13,7 @@ venv
 
 /documents
 /metadata
+
+# Local agent artifacts
+AGENT_REFACTORING_SPEC.md
+benchmark_after_fixes.json

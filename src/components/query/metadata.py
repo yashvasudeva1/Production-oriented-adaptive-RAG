@@ -48,7 +48,7 @@ class AdaptiveQueryMetadataExtractor:
         if self.use_llm and os.getenv("GROQ_API_KEY") and not os.getenv("OFFLINE_EVAL"):
             try:
                 from langchain_groq import ChatGroq
-                model_name = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+                model_name = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
                 self._groq_extractor = ChatGroq(
                     model=model_name,
                     api_key=os.getenv("GROQ_API_KEY"),

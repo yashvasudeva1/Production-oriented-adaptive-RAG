@@ -92,7 +92,7 @@ class GroundedGenerator:
             import requests
             groq_models = [self.model_name] if self.model_name else [
                 os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b"),
-                "llama-3.1-8b-instant",
+                "openai/gpt-oss-20b",
             ]
             for m in groq_models:
                 if not m:

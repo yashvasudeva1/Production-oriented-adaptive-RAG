@@ -39,4 +39,25 @@ def decompose_query(query: str) -> List[str]:
             sub_queries.append(f"{p_clean}?")
         return sub_queries
 
+    # Check for multi-hop synthesis: "How does A connect to / interact with / influence B"
+    hop_match = re.search(
+        r"(?:how does|how do|explain how|why does)\s+(.+?)\s+(?:connect to|connects to|interact with|interact in|jointly impact|jointly affect|influence whether|influence|prevent|mitigate)\s+(.+)",
+        q,
+        re.IGNORECASE,
+    )
+    if hop_match:
+        part_a = hop_match.group(1).strip(" ?.")
+        part_b = hop_match.group(2).strip(" ?.")
+        sub_queries = []
+        if not re.match(r"^(what|how|why|when|where|who)\b", part_a, re.I):
+            sub_queries.append(f"What is {part_a}?")
+        else:
+            sub_queries.append(f"{part_a}?")
+        if not re.match(r"^(what|how|why|when|where|who)\b", part_b, re.I):
+            sub_queries.append(f"What is {part_b}?")
+        else:
+            sub_queries.append(f"{part_b}?")
+        sub_queries.append(q)
+        return sub_queries
+
     return [q]

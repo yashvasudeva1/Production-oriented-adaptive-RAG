@@ -1,0 +1,20 @@
+[
+  {
+    "query_id": "exact_01",
+    "official_answer_correctness": 0.9551,
+    "deterministic_token_f1": 0.6667,
+    "official_faithfulness": 1.0,
+    "deterministic_faithfulness": 1.0,
+    "response": "The dimension $d_{model}$ of the Transformer base model is 512 [1].",
+    "reference": "In the base Transformer model, the embedding and hidden representation dimension d_model is 512."
+  },
+  {
+    "query_id": "exact_02",
+    "official_answer_correctness": 0.994,
+    "deterministic_token_f1": 0.8333,
+    "official_faithfulness": 1.0,
+    "deterministic_faithfulness": 1.0,
+    "response": "The Transformer encoder stack is composed of **N = 6** identical layers [1].",
+    "reference": "The Transformer encoder stack consists of N = 6 identical layers."
+  }
+]

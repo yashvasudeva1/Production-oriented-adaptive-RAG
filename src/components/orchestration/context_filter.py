@@ -17,7 +17,7 @@ class ContextFilter:
     def __init__(
         self,
         max_context_tokens: int = 2048,
-        min_rerank_score: float = -5.0,
+        min_rerank_score: float = -12.0,
         similarity_threshold: float = 0.85,
     ) -> None:
         self.max_context_tokens = max_context_tokens

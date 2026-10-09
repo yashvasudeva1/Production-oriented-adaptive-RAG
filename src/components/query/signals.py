@@ -36,6 +36,7 @@ class QuerySignals:
     section_references: List[str] = field(default_factory=list)
     comparison_terms: List[str] = field(default_factory=list)
     is_multi_part: bool = False
+    is_multi_hop: bool = False
     word_count: int = 0
     clause_count: int = 1
 
@@ -116,6 +117,12 @@ def extract_query_signals(query: str, normalized_query: str) -> QuerySignals:
     ]
     is_multi_part = any(re.search(p, q_raw) for p in conjunction_patterns) or len(re.findall(r"\?", q_raw)) > 1
 
+    # Multi-hop synthesis indicators (connecting disparate concepts)
+    multi_hop_patterns = [
+        r"\b(?:connect to|connects to|interact with|interact in|jointly impact|jointly affect|influence whether|influence how|mitigate\b.*\bwhen|prevent\b.*\bcaused by|combine\b.*\bfrom)\b",
+    ]
+    is_multi_hop = any(re.search(p, q_lower) for p in multi_hop_patterns)
+
     # Clause count estimate
     clauses = re.split(r"[,;]|\band\b", q_lower)
     clause_count = max(1, len([c for c in clauses if len(c.strip()) > 3]))
@@ -131,17 +138,17 @@ def extract_query_signals(query: str, normalized_query: str) -> QuerySignals:
         intent = "procedural"
     elif re.search(r"^(?:who|when|where|which|how much|how many|what is the dimension|what is the value|what was the bleu|what year|what dropout)\b", q_lower):
         intent = "fact"
-    elif re.search(r"^(?:how does|how do|explain|describe|why|walk me through|what are the)\b", q_lower):
-        intent = "detailed"
     elif re.search(r"\b(?:summarize|overview of|tell me about|core thesis|main contributions)\b", q_lower):
         intent = "summary"
+    elif re.search(r"^(?:how does|how do|explain|describe|why|walk me through|what are the)\b", q_lower):
+        intent = "detailed"
     elif exact_ids and word_count <= 8:
         intent = "fact"
     else:
         intent = "general"
 
     # 9. Complexity determination
-    if comp_matches or is_multi_part or clause_count >= 3 or word_count > 20:
+    if comp_matches or is_multi_part or is_multi_hop or clause_count >= 3 or word_count > 20:
         complexity = "high"
     elif word_count > 10 or intent in ("detailed", "procedural", "summary"):
         complexity = "medium"
@@ -152,7 +159,7 @@ def extract_query_signals(query: str, normalized_query: str) -> QuerySignals:
     # Exact/simple queries begin on the ultra-fast BM25 path
     if (intent in ("fact", "technical_exact") and complexity == "low") or (quoted and word_count <= 6):
         initial_route: InitialRoute = "fast"
-    elif complexity == "high" or intent == "comparison":
+    elif complexity == "high" or intent in ("comparison", "summary") or is_multi_hop:
         initial_route = "deep"
     else:
         initial_route = "balanced"
@@ -170,6 +177,7 @@ def extract_query_signals(query: str, normalized_query: str) -> QuerySignals:
         section_references=section_refs,
         comparison_terms=comp_matches,
         is_multi_part=is_multi_part,
+        is_multi_hop=is_multi_hop,
         word_count=word_count,
         clause_count=clause_count,
     )

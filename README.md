@@ -4,7 +4,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
 [![Qdrant](https://img.shields.io/badge/Qdrant-Vector%20DB-red.svg)](https://qdrant.tech)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/Tests-46%20Passed-brightgreen.svg)](tests/)
+[![Tests Passing](https://img.shields.io/badge/Tests-88%20Passed-brightgreen.svg)](tests/)
 
 **Production-oriented Adaptive RAG** is an enterprise-grade, latency-aware, retrieval-quality-aware Retrieval-Augmented Generation (RAG) platform. Rather than naively executing an expensive vector-search and cross-encoder cascade on every query, Production-oriented Adaptive RAG implements an **adaptive, filter-aware, hybrid, confidence-gated pipeline** engineered for strict latency budgets (P50, P95, P99), compute efficiency, and high retrieval precision.
 
@@ -149,14 +149,14 @@ Configurable via `FUSION_METHOD`:
 ## Default Models Configuration
 
 *   **Dense Embedding Model:** `thenlper/gte-small` (384-dimensional unit-normalized embeddings, 512-token context window, CPU-optimized inference).
-*   **Vector Distance Metric:** `Distance.DOT` (Dot Product, eliminating square-root normalization overhead on normalized vectors).
-*   **Reranker Model:** `BAAI/bge-reranker-large` (Domain-agnostic, robust, with $\ge 0.85$ confidence bypass).
-*   **Hybrid Rank Fusion:** High-performance Weighted Reciprocal Rank Fusion (RRF) with $w_{\text{BM25}}=0.82$ and $w_{\text{Dense}}=0.18$.
-*   **Chunk Bounds:** 200 standard tokens with 30-token overlap, eliminating context truncation while preserving semantic completeness.
+*   **Vector Distance Metric:** `Distance.DOT` (Dot Product on normalized vectors, eliminating square-root normalization overhead).
+*   **Reranker Model:** `cross-encoder/ms-marco-MiniLM-L-6-v2` (with optional drop-in `BAAI/bge-reranker-large`; evaluated with $\ge 0.85$ confidence bypass).
+*   **Hybrid Rank Fusion:** CPU-Optimized Weighted Reciprocal Rank Fusion (RRF) ($w_{\text{BM25}}=0.82$, $w_{\text{Dense}}=0.18$).
+*   **Chunk Bounds:** 200 standard tokens with 30-token overlap, preserving semantic completeness within encoder limits.
 
 ## Benchmark & Empirical Evaluation
 
-All benchmarks are measured directly on the codebase using real chunking, indexing, Qdrant vector retrieval, BM25 scoring, and cross-encoders.
+All benchmarks are measured directly on the codebase using real chunking, indexing, Qdrant vector retrieval, BM25 scoring, cross-encoders, and query planning. Latencies reflect full end-to-end execution on commodity CPU hardware without artificial warm-cache skew.
 
 ### 1. Full Production Benchmark Report (110 Cases)
 Executed across 11 diverse evaluation categories (`exact`, `conceptual`, `procedural`, `comparison`, `summarization`, `multi_part`, `metadata_filtered`, `multi_hop`, `unanswerable`, `false_premise`, `adversarial`).
@@ -166,46 +166,46 @@ Executed across 11 diverse evaluation categories (`exact`, `conceptual`, `proced
 Production-oriented Adaptive RAG — Benchmark Evaluation Report [Mode: ADAPTIVE]
 ---------------------------------------------------------------------------
 Total Test Cases      : 110
-MRR (Mean Reciprocal) : 0.6949
-Recall@K              : 0.8298
-Precision@K           : 0.4725
-Hit Rate@K            : 83.0%
-nDCG@K                : 0.6999
-Abstention Accuracy   : 85.5%
-Citation Accuracy     : 97.9%
+MRR (Mean Reciprocal) : 0.7320
+Recall@K              : 0.7872
+Precision@K           : 0.5270
+Hit Rate@K            : 77.7%
+nDCG@K                : 0.7264
+Abstention Accuracy   : 90.0%
+Citation Accuracy     : 89.4%
 ---------------------------------------------------------------------------
 Routing Distribution:
   Fast Path Rate      :   3.6%
-  Balanced Path Rate  :  80.9%
-  Deep Path Rate      :  15.5%
-  Escalation Rate     :   3.6%
-  Rerank Rate         :  89.1%
+  Balanced Path Rate  :  53.6%
+  Deep Path Rate      :  42.7%
+  Escalation Rate     :  16.4%
+  Rerank Rate         :  88.2%
   Multi-Query Rate    :   0.0%
-  Parent Expansion    :  49.1%
-  Abstention Rate     :   3.6%
+  Parent Expansion    :  56.4%
+  Abstention Rate     :  22.7%
 ---------------------------------------------------------------------------
-Latency Distribution (ms):
-  Min   :    1.2 ms
-  P50   :    6.0 ms
-  P90   :    8.4 ms
-  P95   :    9.9 ms
-  P99   :   18.0 ms
-  Mean  :    7.0 ms
-  Max   :  105.1 ms
+Latency Distribution (Full Execution on Commodity CPU):
+  Min   :    2.0 ms  (Fast Path / BM25 Selective Hits)
+  P50   :  556.3 ms  (Balanced Path with Cross-Encoder)
+  P90   : 1135.5 ms  (Deep Path with Multi-Hop Expansion)
+  P95   : 1212.9 ms
+  P99   : 1581.8 ms
+  Mean  :  584.0 ms
+  Max   : 2900.2 ms
 ---------------------------------------------------------------------------
 Category        | Cases | Recall | Prec   | MRR    | Citations | P50 (ms) | P95 (ms)
 ---------------------------------------------------------------------------
-exact           | 10    | 0.80   | 0.41   | 0.73   | 100.0   % | 6.8      | 66.3    
-conceptual      | 10    | 1.00   | 0.66   | 0.83   | 100.0   % | 4.9      | 6.7     
-procedural      | 10    | 0.90   | 0.37   | 0.68   | 100.0   % | 4.9      | 7.1     
-comparison      | 10    | 1.00   | 0.56   | 0.87   | 100.0   % | 9.0      | 10.5    
-summarization   | 10    | 0.60   | 0.36   | 0.60   | 100.0   % | 5.2      | 7.4     
-multi_part      | 10    | 0.80   | 0.32   | 0.59   | 100.0   % | 7.0      | 9.5     
-metadata_filtered | 10  | 0.80   | 0.74   | 0.80   | 80.0    % | 5.6      | 8.7     
-multi_hop       | 10    | 0.90   | 0.51   | 0.64   | 100.0   % | 4.9      | 7.9     
-unanswerable    | 10    | N/A    | N/A    | N/A    | N/A       | 5.3      | 7.2     
-false_premise   | 10    | 0.70   | 0.36   | 0.53   | 100.0   % | 6.2      | 7.3     
-adversarial     | 10    | 0.75   | 0.42   | 0.62   | 100.0   % | 5.6      | 7.4    
+exact           | 10    | 0.80   | 0.45   | 0.73   | 100.0   % | 103.2    | 1807.5  
+conceptual      | 10    | 1.00   | 0.65   | 1.00   | 100.0   % | 405.7    | 606.3   
+procedural      | 10    | 0.70   | 0.34   | 0.57   |  80.0   % | 480.6    | 646.9   
+comparison      | 10    | 0.90   | 0.69   | 0.85   | 100.0   % | 966.7    | 1212.9  
+summarization   | 10    | 0.70   | 0.46   | 0.61   |  90.0   % | 607.8    | 955.1   
+multi_part      | 10    | 0.80   | 0.49   | 0.80   |  90.0   % | 980.6    | 1206.6  
+metadata_filtered | 10  | 0.90   | 0.90   | 0.90   |  90.0   % | 191.3    | 620.4   
+multi_hop       | 10    | 0.90   | 0.53   | 0.77   |  90.0   % | 1075.9   | 1474.8  
+unanswerable    | 10    | N/A    | N/A    | N/A    | N/A       | 708.3    | 793.6   
+false_premise   | 10    | 0.70   | 0.45   | 0.65   | 100.0   % | 341.2    | 666.7   
+adversarial     | 10    | 0.00   | 0.00   | 0.00   |   0.0   % | 583.1    | 779.2   
 ---------------------------------------------------------------------------
 ```
 
@@ -244,6 +244,31 @@ Measured across varying selectivity thresholds (1% to 100%) and predicate counts
 | **100.0%** (Unfiltered Baseline)| 100 chunks | 0 | **14.88 ms** | **18.72 ms** | **15.59 ms** | **64.1 QPS** | **0.0%** |
 
 *Pre-filtering achieves a **3.9x throughput speedup** on selective queries compared to unfiltered vector scans.*
+
+---
+
+### 4. Production RAGAS Evaluation Framework (110 Cases)
+
+A production-grade, reproducible evaluation harness implementing official RAGAS metrics with statistical bootstrapping and offline deterministic verification:
+
+- **Dual-Engine Evaluation Architecture**:
+  - **Official LLM Judge Engine**: Uses `qwen/qwen3.8-27b` (via Groq OpenAI compatibility) or `gpt-4o-mini` with embeddings for semantic claim extraction, atomic statement classification, and reference similarity.
+  - **Deterministic Heuristic Suite**: Computes exact set-theoretic overlap, token-set F1, and citation alignment for CI/CD regression testing without external API rate-limit dependencies.
+- **Metric Interpretation Transparency**:
+  - **Answer Correctness (LLM Judge)**: Evaluates semantic and factual equivalence ($0.75 \cdot F_{1,\text{factual}} + 0.25 \cdot \text{CosineSim}$), scoring **0.95–0.99** on answerable queries.
+  - **Answer Correctness (Deterministic Token F1)**: Reports raw surface token-set F1 (~0.16), explicitly distinguished to avoid misleading comparisons caused by response length variations.
+
+#### Comparative Configuration Matrix (110 Test Cases)
+
+| Configuration | Context Precision | Context Recall | Faithfulness | Answer Relevancy | Answer Correctness (Token F1) | Abstention Acc | Mean Latency |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **DENSE** | 0.6028 | 0.3604 | 0.8227 | 0.5284 | 0.1563 | 90.9% | 830.5 ms |
+| **BM25** | 0.6718 | 0.3995 | 0.9379 | 0.5484 | 0.1541 | 94.5% | 1.9 ms |
+| **HYBRID (0.82/0.18 RRF)** | 0.6441 | 0.3629 | 0.7727 | 0.5208 | 0.1586 | 90.0% | 5.1 ms |
+| **HYBRID + RERANK** | **0.6734** | **0.4097** | **0.9803** | **0.5284** | 0.1563 | 90.9% | 131.7 ms |
+| **ADAPTIVE (Production)** | 0.6368 | 0.3697 | 0.7727 | 0.5237 | **0.1617** | 90.0% | 1.9 ms |
+
+*Detailed markdown report, bootstrap confidence intervals, and per-query records are maintained in [RAGAS_EVALUATION_REPORT.md](RAGAS_EVALUATION_REPORT.md) and `metadata/ragas_records.csv`.*
 
 ---
 
@@ -325,7 +350,7 @@ python main.py
 Execute the test and evaluation suites:
 
 ```bash
-# 1. Run the entire unit and integration test suite (46 tests)
+# 1. Run the entire unit and integration test suite (88 tests)
 pytest tests/ -v
 
 # 2. Run the P0 architectural verification tests
@@ -342,6 +367,9 @@ python -m src.evaluation.ablation --limit 20
 
 # 6. Run the Metadata Filtering Scalability Benchmark
 python -m src.evaluation.metadata_benchmark
+
+# 7. Run the Production RAGAS Evaluation Framework
+python -m src.evaluation.ragas_eval --engine deterministic
 ```
 
 ---

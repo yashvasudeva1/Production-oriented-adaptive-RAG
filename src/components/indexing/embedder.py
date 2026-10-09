@@ -98,9 +98,14 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         if self._model is None:
             try:
                 from sentence_transformers import SentenceTransformer
-                self._model = SentenceTransformer(
-                    self.model_name, device=self.device
-                )
+                try:
+                    self._model = SentenceTransformer(
+                        self.model_name, device=self.device, local_files_only=True
+                    )
+                except Exception:
+                    self._model = SentenceTransformer(
+                        self.model_name, device=self.device
+                    )
                 if hasattr(self._model, "get_embedding_dimension"):
                     self._dimension = self._model.get_embedding_dimension()
                 else:

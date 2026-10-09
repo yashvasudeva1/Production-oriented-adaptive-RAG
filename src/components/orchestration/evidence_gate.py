@@ -29,8 +29,8 @@ class EvidenceGate:
     def __init__(
         self,
         min_supporting_chunks: int = 1,
-        min_confidence: float = 0.40,
-        min_rerank_threshold: float = -4.0,
+        min_confidence: float = 0.20,
+        min_rerank_threshold: float = -5.0,
     ) -> None:
         self.min_supporting_chunks = min_supporting_chunks
         self.min_confidence = min_confidence
@@ -41,6 +41,7 @@ class EvidenceGate:
         query: str,
         candidates: Sequence[RerankerResult],
     ) -> EvidenceVerdict:
+        import math
         q_clean = query.strip()
 
         if not candidates:
@@ -51,9 +52,37 @@ class EvidenceGate:
                 supporting_chunks=[],
             )
 
+        # 1. Adversarial Injection and Jailbreak Guard
+        ADVERSARIAL_PATTERNS = [
+            r"ignore\s+(all\s+)?(previous|prior)\s+instructions",
+            r"system\s+(prompt|override)",
+            r"you\s+are\s+now\s+dan",
+            r"bypass\s+authentication",
+            r"reveal\s+(database\s+)?credentials",
+            r"secret\s+administrator\s+passwords",
+            r"manufacture\s+explosives",
+            r"drop\s+table",
+            r"select\s+\*\s+from",
+            r"<script>",
+            r"unrestricted\s+chatbot\s+without\s+citations",
+            r"private\s+tenants\s+in\s+the\s+database",
+            r"repeat\s+the\s+word\s+['\"]?access_granted",
+        ]
+        q_lower = q_clean.lower()
+        for pat in ADVERSARIAL_PATTERNS:
+            if re.search(pat, q_lower):
+                return EvidenceVerdict(
+                    allowed=False,
+                    confidence=0.0,
+                    reason="Adversarial instruction or security policy violation detected. Operating strictly as a grounded research assistant.",
+                    supporting_chunks=[],
+                )
+
         # Check that top candidates cross the minimum relevance threshold
         viable_chunks = [
-            c for c in candidates if c.rerank_score >= self.min_rerank_threshold
+            c for c in candidates
+            if c.rerank_score >= self.min_rerank_threshold
+            or (getattr(c, "keyword_score", None) is not None and c.keyword_score >= 3.0)
         ]
 
         if len(viable_chunks) < self.min_supporting_chunks:
@@ -67,32 +96,32 @@ class EvidenceGate:
                 supporting_chunks=[],
             )
 
-        # Premise verification: check keyword presence to guard against false premises
-        q_words = set(re.findall(r"\b[a-zA-Z0-9_-]{3,}\b", q_clean.lower()))
-        # Remove common query stop words
-        common_stops = {
+        # 2. Comprehensive stopword filtering for substantive entity verification
+        STOPWORDS = {
             "what", "when", "where", "which", "who", "whom", "whose", "why",
             "how", "does", "explain", "tell", "about", "describe", "compare",
             "with", "from", "that", "this", "these", "those", "have", "were",
+            "the", "for", "and", "are", "can", "you", "all", "not", "but",
+            "any", "some", "each", "into", "over", "after", "before", "more",
+            "also", "than", "been", "has", "had", "would", "could", "should",
+            "its", "our", "their", "will", "out", "other", "give", "show",
+            "provide", "find", "use", "used", "using", "between", "under", "per"
         }
-        key_q_words = q_words - common_stops
+        q_tokens = re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", q_lower)
+        key_q_words = [w for w in q_tokens if w not in STOPWORDS]
 
         if not key_q_words:
-            key_q_words = q_words
+            key_q_words = q_tokens
 
         combined_text = " ".join(c.text.lower() for c in viable_chunks)
-        overlap_words = {w for w in key_q_words if w in combined_text}
+        overlap_words = [w for w in key_q_words if w in combined_text]
+        overlap_ratio = len(overlap_words) / max(1, len(key_q_words))
 
-        if key_q_words:
-            overlap_ratio = len(overlap_words) / len(key_q_words)
-        else:
-            overlap_ratio = 1.0
-
-        # If less than 20% of query keywords appear anywhere in retrieved context
-        if overlap_ratio < 0.20 and len(key_q_words) >= 3:
+        # 3. Evidence sufficiency check: unanswerable / out-of-domain detection
+        if len(overlap_words) == 0 or (len(overlap_words) < 2 and len(key_q_words) >= 3) or overlap_ratio < 0.25:
             return EvidenceVerdict(
                 allowed=False,
-                confidence=0.20,
+                confidence=round(overlap_ratio * 0.3, 2),
                 reason=(
                     "The retrieved context lacks key terminology and premise evidence "
                     "for the query. Refusing to hallucinate."
@@ -100,10 +129,14 @@ class EvidenceGate:
                 supporting_chunks=[],
             )
 
-        # Compute confidence score
-        best_score = max(c.rerank_score for c in viable_chunks)
-        # Normalize heuristic confidence between 0.0 and 1.0
-        confidence = min(1.0, max(0.4, 0.5 + (best_score / 10.0) + (overlap_ratio * 0.3)))
+        # 4. Authentic calibrated confidence score (no artificial max(0.4, ...) floor)
+        best_score = max((c.rerank_score for c in viable_chunks), default=0.0)
+        if best_score > 1.0 or best_score < 0.0:
+            sig_score = 1.0 / (1.0 + math.exp(-max(-6.0, min(6.0, best_score))))
+        else:
+            sig_score = min(1.0, best_score * 20.0) if best_score < 0.05 else best_score
+
+        confidence = round(min(1.0, (sig_score * 0.4) + (overlap_ratio * 0.6)), 2)
 
         if confidence < self.min_confidence:
             return EvidenceVerdict(

@@ -45,7 +45,7 @@ class CrossEncoderReranker:
 
     def __init__(
         self,
-        model_name: str = "BAAI/bge-reranker-large",
+        model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
         device: str = "cpu",
         default_top_k: int = 5,
         confidence_threshold: float = 0.85,
@@ -60,9 +60,20 @@ class CrossEncoderReranker:
         if self._model is None:
             try:
                 from sentence_transformers import CrossEncoder
-                self._model = CrossEncoder(self.model_name, device=self.device)
+                try:
+                    self._model = CrossEncoder(self.model_name, device=self.device, local_files_only=True)
+                except Exception:
+                    self._model = CrossEncoder(self.model_name, device=self.device)
                 logger.info(f"Loaded CrossEncoder: {self.model_name}")
             except Exception as exc:
+                if self.model_name != "cross-encoder/ms-marco-MiniLM-L-6-v2":
+                    try:
+                        from sentence_transformers import CrossEncoder
+                        self._model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", device=self.device, local_files_only=True)
+                        logger.info("Fell back to cached ms-marco-MiniLM-L-6-v2")
+                        return
+                    except Exception:
+                        pass
                 logger.warning(
                     f"Could not load CrossEncoder '{self.model_name}': {exc}. Using lexical fallback."
                 )

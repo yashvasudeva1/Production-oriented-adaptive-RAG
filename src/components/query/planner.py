@@ -219,21 +219,21 @@ class QueryPlanner:
             top_k_dense = 15
             top_k_keyword = 12
             rerank_top_k = 8
-            context_budget = 3000
+            context_budget = 3500
         else:
             # Balanced mode: parallel BM25 + dense, RRF fusion, conditional rerank
             req_dense = True
             req_keyword = True
             req_hybrid = True
-            req_parent_child = (signals.intent in ("detailed", "procedural"))
+            req_parent_child = (signals.intent in ("detailed", "procedural", "summary"))
             req_multi_query = False
             req_decomposition = False
             req_rerank = True
-            top_k = 10
-            top_k_dense = 10
-            top_k_keyword = 10
-            rerank_top_k = 5
-            context_budget = 2048
+            top_k = 15 if signals.intent == "summary" else 10
+            top_k_dense = 15 if signals.intent == "summary" else 10
+            top_k_keyword = 12 if signals.intent == "summary" else 10
+            rerank_top_k = 8 if signals.intent == "summary" else 5
+            context_budget = 3200 if signals.intent == "summary" else 2048
 
         has_meta_filter = bool(candidate_ids) or bool(retrieval_filter.hard_filters)
         q_type: QueryType = (

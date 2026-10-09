@@ -16,7 +16,7 @@ class AppConfig:
         default_factory=lambda: os.getenv("EMBEDDING_MODEL", "thenlper/gte-small")
     )
     reranker_model: str = field(
-        default_factory=lambda: os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-large")
+        default_factory=lambda: os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
     )
     qdrant_url: str = field(default_factory=lambda: os.getenv("QDRANT_URL", ""))
     qdrant_collection: str = field(
