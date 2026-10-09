@@ -363,7 +363,7 @@ def run_benchmark(
 def print_report(rep: BenchmarkReport, mode_label: str = "adaptive") -> None:
     """Print clean, structured benchmark results table."""
     print("-" * 75)
-    print(f"ResearchLens — Benchmark Evaluation Report [Mode: {mode_label.upper()}]")
+    print(f"Production-oriented Adaptive RAG — Benchmark Evaluation Report [Mode: {mode_label.upper()}]")
     print("-" * 75)
     print(f"Total Test Cases      : {rep.total_cases}")
     print(f"MRR (Mean Reciprocal) : {rep.mrr:.4f}")
@@ -416,7 +416,7 @@ def print_report(rep: BenchmarkReport, mode_label: str = "adaptive") -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ResearchLens — Production Benchmark Runner")
+    parser = argparse.ArgumentParser(description="Production-oriented Adaptive RAG — Benchmark Runner")
     parser.add_argument(
         "--mode",
         choices=["fast", "balanced", "deep", "adaptive"],
@@ -426,7 +426,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="Limit number of evaluation cases")
     parser.add_argument("--category", type=str, default=None, help="Filter cases by category")
     parser.add_argument("--top-k", type=int, default=5, help="Top-K retrieval depth")
-    parser.add_argument("--output", type=str, default=None, help="Path to save JSON benchmark output")
+    parser.add_argument("--output", type=str, default="metadata/benchmark_production_frozen.json", help="Path to save JSON benchmark output")
     parser.add_argument("--verbose", action="store_true", help="Print per-case execution logs")
     parser.add_argument("--trace", action="store_true", help="Print per-query end-to-end trace view")
 

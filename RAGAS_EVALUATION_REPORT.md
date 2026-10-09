@@ -1,7 +1,7 @@
 # Production Evaluation Report
 
 - **Evaluation Regime:** Deterministic Offline Fallback (Heuristic Token/Set Math)
-- **Evaluated At:** 2026-10-09T13:37:33.218676+00:00
+- **Evaluated At:** 2026-10-09T14:56:26.316333+00:00
 - **LLM Evaluator:** None (offline deterministic formulas)
 - **Engine Execution:** `deterministic_fallback`
 - **Total Test Cases Evaluated:** `110`
@@ -16,49 +16,49 @@
 
 | Configuration | Context Precision | Context Recall | Faithfulness | Answer Relevancy | Answer Correctness (Token F1) | Abstention Acc | Mean Latency |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **DENSE** | 0.6028 | 0.3604 | 0.8227 | 0.5284 | 0.1563 | 90.9% | 830.5 ms |
-| **BM25** | 0.6718 | 0.3995 | 0.9379 | 0.5484 | 0.1541 | 94.5% | 1.9 ms |
-| **HYBRID** | 0.6441 | 0.3629 | 0.7727 | 0.5208 | 0.1586 | 90.0% | 5.1 ms |
-| **HYBRID_RERANK** | 0.6734 | 0.4097 | 0.9803 | 0.5284 | 0.1563 | 90.9% | 131.7 ms |
-| **ADAPTIVE** | 0.6368 | 0.3697 | 0.7727 | 0.5237 | 0.1617 | 90.0% | 1.9 ms |
+| **DENSE** | 0.5937 | 0.3569 | 0.8561 | 0.5352 | 0.1625 | 97.3% | 1235.8 ms |
+| **BM25** | 0.6445 | 0.3925 | 0.9333 | 0.5503 | 0.1561 | 98.2% | 2.7 ms |
+| **HYBRID** | 0.6182 | 0.3787 | 0.8000 | 0.5330 | 0.1603 | 98.2% | 12.4 ms |
+| **HYBRID_RERANK** | 0.6462 | 0.4037 | 0.9773 | 0.5352 | 0.1625 | 97.3% | 105.2 ms |
+| **ADAPTIVE** | 0.6197 | 0.3810 | 0.7909 | 0.5357 | 0.1634 | 97.3% | 3.0 ms |
 
 ## 2. Statistical Uncertainty (95% Bootstrap Confidence Intervals)
 
 | Configuration | Metric | Mean | 95% CI Lower | 95% CI Upper | Std Dev |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| dense | context_precision | 0.6028 | 0.5193 | 0.6811 | 0.4347 |
-| dense | context_recall | 0.3604 | 0.3113 | 0.4089 | 0.2581 |
-| dense | faithfulness | 0.8227 | 0.7697 | 0.8742 | 0.2867 |
-| dense | answer_correctness | 0.1563 | 0.1336 | 0.1783 | 0.1191 |
-| bm25 | context_precision | 0.6718 | 0.5903 | 0.7415 | 0.4189 |
-| bm25 | context_recall | 0.3995 | 0.3497 | 0.4443 | 0.2576 |
-| bm25 | faithfulness | 0.9379 | 0.9030 | 0.9682 | 0.1732 |
-| bm25 | answer_correctness | 0.1541 | 0.1316 | 0.1763 | 0.1200 |
-| hybrid | context_precision | 0.6441 | 0.5563 | 0.7196 | 0.4550 |
-| hybrid | context_recall | 0.3629 | 0.3063 | 0.4153 | 0.2975 |
-| hybrid | faithfulness | 0.7727 | 0.6909 | 0.8545 | 0.4210 |
-| hybrid | answer_correctness | 0.1586 | 0.1344 | 0.1815 | 0.1224 |
-| hybrid_rerank | context_precision | 0.6734 | 0.5880 | 0.7493 | 0.4339 |
-| hybrid_rerank | context_recall | 0.4097 | 0.3612 | 0.4572 | 0.2590 |
-| hybrid_rerank | faithfulness | 0.9803 | 0.9652 | 0.9939 | 0.0837 |
-| hybrid_rerank | answer_correctness | 0.1563 | 0.1336 | 0.1783 | 0.1191 |
-| adaptive | context_precision | 0.6368 | 0.5505 | 0.7125 | 0.4504 |
-| adaptive | context_recall | 0.3697 | 0.3137 | 0.4220 | 0.2974 |
-| adaptive | faithfulness | 0.7727 | 0.6909 | 0.8545 | 0.4210 |
-| adaptive | answer_correctness | 0.1617 | 0.1381 | 0.1852 | 0.1241 |
+| dense | context_precision | 0.5937 | 0.5120 | 0.6680 | 0.4367 |
+| dense | context_recall | 0.3569 | 0.3084 | 0.4047 | 0.2616 |
+| dense | faithfulness | 0.8561 | 0.8121 | 0.9000 | 0.2468 |
+| dense | answer_correctness | 0.1625 | 0.1391 | 0.1873 | 0.1258 |
+| bm25 | context_precision | 0.6445 | 0.5638 | 0.7144 | 0.4291 |
+| bm25 | context_recall | 0.3925 | 0.3408 | 0.4397 | 0.2649 |
+| bm25 | faithfulness | 0.9333 | 0.8985 | 0.9636 | 0.1781 |
+| bm25 | answer_correctness | 0.1561 | 0.1338 | 0.1814 | 0.1233 |
+| hybrid | context_precision | 0.6182 | 0.5374 | 0.6911 | 0.4481 |
+| hybrid | context_recall | 0.3787 | 0.3231 | 0.4315 | 0.2989 |
+| hybrid | faithfulness | 0.8000 | 0.7273 | 0.8727 | 0.4018 |
+| hybrid | answer_correctness | 0.1603 | 0.1366 | 0.1849 | 0.1265 |
+| hybrid_rerank | context_precision | 0.6462 | 0.5602 | 0.7232 | 0.4439 |
+| hybrid_rerank | context_recall | 0.4037 | 0.3533 | 0.4522 | 0.2652 |
+| hybrid_rerank | faithfulness | 0.9773 | 0.9591 | 0.9939 | 0.0970 |
+| hybrid_rerank | answer_correctness | 0.1625 | 0.1391 | 0.1873 | 0.1258 |
+| adaptive | context_precision | 0.6197 | 0.5388 | 0.6929 | 0.4480 |
+| adaptive | context_recall | 0.3810 | 0.3248 | 0.4351 | 0.3002 |
+| adaptive | faithfulness | 0.7909 | 0.7182 | 0.8636 | 0.4085 |
+| adaptive | answer_correctness | 0.1634 | 0.1398 | 0.1884 | 0.1275 |
 
 ## 3. Per-Category Breakdown (Production Adaptive Pipeline)
 
 | Category | Cases | Context Precision | Context Recall | Faithfulness | Relevancy | Correctness | Abstention | P50 Latency |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `exact` | 10 | 0.9739 | 0.6126 | 1.0000 | 0.6055 | 0.1635 | 100.0% | 2.3 ms |
-| `conceptual` | 10 | 0.9963 | 0.6670 | 1.0000 | 0.7051 | 0.2566 | 100.0% | 2.0 ms |
-| `procedural` | 10 | 0.5756 | 0.4052 | 0.8000 | 0.5364 | 0.0964 | 80.0% | 1.8 ms |
-| `comparison` | 10 | 0.6998 | 0.4146 | 1.0000 | 0.6935 | 0.1208 | 100.0% | 2.0 ms |
-| `summarization` | 10 | 0.6900 | 0.3245 | 0.9000 | 0.5380 | 0.1120 | 90.0% | 1.8 ms |
-| `multi_part` | 10 | 0.6833 | 0.4055 | 0.9000 | 0.5071 | 0.1464 | 90.0% | 1.9 ms |
-| `metadata_filtered` | 10 | 0.7960 | 0.4652 | 0.9000 | 0.5403 | 0.1293 | 90.0% | 1.7 ms |
-| `multi_hop` | 10 | 0.6465 | 0.2947 | 0.9000 | 0.5043 | 0.0955 | 90.0% | 1.7 ms |
-| `unanswerable` | 10 | 0.0000 | 0.0000 | 0.1000 | 0.3272 | 0.3900 | 90.0% | 1.8 ms |
-| `false_premise` | 10 | 0.9432 | 0.4771 | 1.0000 | 0.4956 | 0.1275 | 100.0% | 1.7 ms |
-| `adversarial` | 10 | 0.0000 | 0.0000 | 0.0000 | 0.3078 | 0.1404 | 60.0% | 1.9 ms |
+| `exact` | 10 | 0.9750 | 0.6210 | 1.0000 | 0.6055 | 0.1592 | 100.0% | 3.2 ms |
+| `conceptual` | 10 | 0.9375 | 0.7091 | 1.0000 | 0.7051 | 0.2513 | 100.0% | 2.8 ms |
+| `procedural` | 10 | 0.7756 | 0.4712 | 1.0000 | 0.5831 | 0.1104 | 100.0% | 2.6 ms |
+| `comparison` | 10 | 0.7201 | 0.4188 | 1.0000 | 0.6935 | 0.1225 | 100.0% | 3.4 ms |
+| `summarization` | 10 | 0.6710 | 0.3670 | 0.9000 | 0.5480 | 0.1100 | 90.0% | 3.2 ms |
+| `multi_part` | 10 | 0.6833 | 0.4065 | 0.9000 | 0.5071 | 0.1435 | 90.0% | 3.2 ms |
+| `metadata_filtered` | 10 | 0.7743 | 0.4861 | 0.9000 | 0.5403 | 0.1250 | 90.0% | 2.8 ms |
+| `multi_hop` | 10 | 0.3463 | 0.2342 | 1.0000 | 0.5883 | 0.0634 | 100.0% | 3.2 ms |
+| `unanswerable` | 10 | 0.0000 | 0.0000 | 0.0000 | 0.3117 | 0.4325 | 100.0% | 3.4 ms |
+| `false_premise` | 10 | 0.9340 | 0.4771 | 1.0000 | 0.5026 | 0.1327 | 100.0% | 2.8 ms |
+| `adversarial` | 10 | 0.0000 | 0.0000 | 0.0000 | 0.3078 | 0.1466 | 100.0% | 2.8 ms |

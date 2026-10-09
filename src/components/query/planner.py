@@ -207,33 +207,34 @@ class QueryPlanner:
             top_k_keyword = 6
             rerank_top_k = 0
             context_budget = 1200
-        elif mode == "deep":
+        elif mode in ("deep", "hybrid_rerank"):
             req_dense = True
             req_keyword = True
             req_hybrid = True
             req_parent_child = True
-            req_multi_query = True
+            req_multi_query = (mode == "deep")
             req_decomposition = len(sub_queries) > 1
             req_rerank = True
-            top_k = 15
-            top_k_dense = 15
-            top_k_keyword = 12
-            rerank_top_k = 8
-            context_budget = 3500
+            top_k = 20
+            top_k_dense = 20
+            top_k_keyword = 18
+            rerank_top_k = 10
+            context_budget = 4000
         else:
             # Balanced mode: parallel BM25 + dense, RRF fusion, conditional rerank
             req_dense = True
             req_keyword = True
             req_hybrid = True
-            req_parent_child = (signals.intent in ("detailed", "procedural", "summary"))
+            req_parent_child = (signals.intent in ("detailed", "procedural", "summary", "multi_hop"))
             req_multi_query = False
             req_decomposition = False
             req_rerank = True
-            top_k = 15 if signals.intent == "summary" else 10
-            top_k_dense = 15 if signals.intent == "summary" else 10
-            top_k_keyword = 12 if signals.intent == "summary" else 10
-            rerank_top_k = 8 if signals.intent == "summary" else 5
-            context_budget = 3200 if signals.intent == "summary" else 2048
+            is_broad = signals.intent in ("summary", "multi_hop", "comparison")
+            top_k = 15 if is_broad else 12
+            top_k_dense = 18 if is_broad else 15
+            top_k_keyword = 18 if is_broad else 15
+            rerank_top_k = 8 if is_broad else 6
+            context_budget = 3500 if is_broad else 2400
 
         has_meta_filter = bool(candidate_ids) or bool(retrieval_filter.hard_filters)
         q_type: QueryType = (

@@ -64,7 +64,7 @@ class RetrievalMetadata(BaseModel):
 
 
 class RAGResponse(BaseModel):
-    """Complete, structured response from the ResearchLens system."""
+    """Complete, structured response from the Production-oriented Adaptive RAG system."""
     query: str
     answer: str
     confidence: float
@@ -377,12 +377,15 @@ class RAGOrchestrator:
             # Conditional reranking: bypass if confidence is high, rerank top candidates if ambiguous
             t_rerank = time.perf_counter()
             should_rerank = (
-                plan.requires_reranking
-                and self.reranker.should_rerank(
-                    query_type=plan.query_type,
-                    execution_mode="balanced",
-                    candidates=fused,
-                    confidence=conf,
+                active_mode == "hybrid_rerank"
+                or (
+                    plan.requires_reranking
+                    and self.reranker.should_rerank(
+                        query_type=plan.query_type,
+                        execution_mode="balanced",
+                        candidates=fused,
+                        confidence=conf,
+                    )
                 )
             )
 
@@ -451,12 +454,35 @@ class RAGOrchestrator:
                     all_candidate_runs.append(base_kw)
                     keyword_count += len(base_kw)
 
-            # Sub-query searches added additively on fine-grained child chunks
+            # Sub-query searches added additively on fine-grained child chunks (both dense and lexical)
             for sub_q in sub_queries[:3]:
                 sub_dense = self._search_dense(sub_q, c_doc_ids, plan.top_k_dense, metadata_filter=m_filter)
                 if sub_dense:
                     all_candidate_runs.append(sub_dense)
                     dense_count += len(sub_dense)
+                sub_kw = self._search_keyword(sub_q, c_doc_ids, plan.top_k_keyword, plan.retrieval_signals, metadata_filter=m_filter)
+                if sub_kw:
+                    all_candidate_runs.append(sub_kw)
+                    keyword_count += len(sub_kw)
+
+            # Multi-query perspective expansion for vocabulary coverage
+            if plan.requires_multi_query:
+                t_mq = time.perf_counter()
+                mq_queries = self.multi_query_retriever.generate_queries(plan.normalized_query)
+                if len(mq_queries) > 1:
+                    did_multi_query = True
+                    for mq_q in mq_queries[1:]:
+                        mq_dense = self._search_dense(mq_q, c_doc_ids, plan.top_k_dense, metadata_filter=m_filter)
+                        if mq_dense:
+                            all_candidate_runs.append(mq_dense)
+                            mq_count += len(mq_dense)
+                            dense_count += len(mq_dense)
+                        mq_kw = self._search_keyword(mq_q, c_doc_ids, plan.top_k_keyword, plan.retrieval_signals, metadata_filter=m_filter)
+                        if mq_kw:
+                            all_candidate_runs.append(mq_kw)
+                            mq_count += len(mq_kw)
+                            keyword_count += len(mq_kw)
+                latencies["multi_query_ms"] = (time.perf_counter() - t_mq) * 1000
 
             latencies["deep_retrieval_ms"] = (time.perf_counter() - t_ret) * 1000
 

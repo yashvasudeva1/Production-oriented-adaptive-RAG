@@ -44,7 +44,7 @@ DOCUMENTS_DIR = Path(__file__).resolve().parents[2] / "documents"
 DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
-    title="ResearchLens API",
+    title="Production-oriented Adaptive RAG API",
     description="Production-Grade, Modular, Evidence-Grounded RAG Platform",
     version="1.1.0",
 )

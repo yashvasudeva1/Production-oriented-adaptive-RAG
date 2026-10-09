@@ -54,15 +54,19 @@ class EvidenceGate:
 
         # 1. Adversarial Injection and Jailbreak Guard
         ADVERSARIAL_PATTERNS = [
-            r"ignore\s+(all\s+)?(previous|prior)\s+instructions",
-            r"system\s+(prompt|override)",
+            r"ignore\s+(all\s+)?(previous|prior|system|factual|facts|evidence|context|rules)",
+            r"system\s+(prompt|override|message|instruction)",
             r"you\s+are\s+now\s+dan",
+            r"act\s+as\s+(an?\s+)?(unrestricted|jailbroken|dan)",
+            r"forget\s+(that\s+)?you\s+are",
+            r"declare\s+that\s+.*was\s+invented",
             r"bypass\s+authentication",
             r"reveal\s+(database\s+)?credentials",
             r"secret\s+administrator\s+passwords",
             r"manufacture\s+explosives",
             r"drop\s+table",
             r"select\s+\*\s+from",
+            r"sql\s+injection",
             r"<script>",
             r"unrestricted\s+chatbot\s+without\s+citations",
             r"private\s+tenants\s+in\s+the\s+database",
@@ -105,7 +109,8 @@ class EvidenceGate:
             "any", "some", "each", "into", "over", "after", "before", "more",
             "also", "than", "been", "has", "had", "would", "could", "should",
             "its", "our", "their", "will", "out", "other", "give", "show",
-            "provide", "find", "use", "used", "using", "between", "under", "per"
+            "provide", "find", "use", "used", "using", "between", "under", "per",
+            "won", "score", "year", "time", "place", "make", "made", "good", "new"
         }
         q_tokens = re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", q_lower)
         key_q_words = [w for w in q_tokens if w not in STOPWORDS]
@@ -117,8 +122,16 @@ class EvidenceGate:
         overlap_words = [w for w in key_q_words if w in combined_text]
         overlap_ratio = len(overlap_words) / max(1, len(key_q_words))
 
+        # Check that at least one single chunk contains cohesive evidence (prevents cross-doc accidental word matching)
+        max_chunk_overlap = max((len([w for w in key_q_words if w in c.text.lower()]) for c in viable_chunks), default=0)
+
         # 3. Evidence sufficiency check: unanswerable / out-of-domain detection
-        if len(overlap_words) == 0 or (len(overlap_words) < 2 and len(key_q_words) >= 3) or overlap_ratio < 0.25:
+        if (
+            len(overlap_words) == 0
+            or (len(overlap_words) < 2 and len(key_q_words) >= 3)
+            or overlap_ratio < 0.25
+            or (len(key_q_words) >= 3 and max_chunk_overlap < 2 and overlap_ratio < 0.35)
+        ):
             return EvidenceVerdict(
                 allowed=False,
                 confidence=round(overlap_ratio * 0.3, 2),

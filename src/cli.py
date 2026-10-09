@@ -139,7 +139,7 @@ def cmd_query(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ResearchLens — Production-Grade RAG CLI"
+        description="Production-oriented Adaptive RAG — CLI"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

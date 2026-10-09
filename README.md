@@ -166,46 +166,46 @@ Executed across 11 diverse evaluation categories (`exact`, `conceptual`, `proced
 Production-oriented Adaptive RAG — Benchmark Evaluation Report [Mode: ADAPTIVE]
 ---------------------------------------------------------------------------
 Total Test Cases      : 110
-MRR (Mean Reciprocal) : 0.7320
-Recall@K              : 0.7872
-Precision@K           : 0.5270
-Hit Rate@K            : 77.7%
-nDCG@K                : 0.7264
-Abstention Accuracy   : 90.0%
-Citation Accuracy     : 89.4%
+MRR (Mean Reciprocal) : 0.7890
+Recall@K              : 0.8556
+Precision@K           : 0.5750
+Hit Rate@K            : 84.4%
+nDCG@K                : 0.7723
+Abstention Accuracy   : 97.3%
+Citation Accuracy     : 96.7%
 ---------------------------------------------------------------------------
 Routing Distribution:
   Fast Path Rate      :   3.6%
-  Balanced Path Rate  :  53.6%
-  Deep Path Rate      :  42.7%
-  Escalation Rate     :  16.4%
-  Rerank Rate         :  88.2%
-  Multi-Query Rate    :   0.0%
+  Balanced Path Rate  :  55.5%
+  Deep Path Rate      :  40.9%
+  Escalation Rate     :  15.5%
+  Rerank Rate         :  87.3%
+  Multi-Query Rate    :  28.2%
   Parent Expansion    :  56.4%
-  Abstention Rate     :  22.7%
+  Abstention Rate     :  20.9%
 ---------------------------------------------------------------------------
 Latency Distribution (Full Execution on Commodity CPU):
   Min   :    2.0 ms  (Fast Path / BM25 Selective Hits)
-  P50   :  556.3 ms  (Balanced Path with Cross-Encoder)
-  P90   : 1135.5 ms  (Deep Path with Multi-Hop Expansion)
-  P95   : 1212.9 ms
-  P99   : 1581.8 ms
-  Mean  :  584.0 ms
-  Max   : 2900.2 ms
+  P50   :  863.9 ms  (Balanced Path with Cross-Encoder)
+  P90   : 1423.8 ms  (Deep Path with Multi-Hop Expansion)
+  P95   : 1504.4 ms
+  P99   : 1851.0 ms
+  Mean  :  801.8 ms
+  Max   : 3179.5 ms
 ---------------------------------------------------------------------------
 Category        | Cases | Recall | Prec   | MRR    | Citations | P50 (ms) | P95 (ms)
 ---------------------------------------------------------------------------
-exact           | 10    | 0.80   | 0.45   | 0.73   | 100.0   % | 103.2    | 1807.5  
-conceptual      | 10    | 1.00   | 0.65   | 1.00   | 100.0   % | 405.7    | 606.3   
-procedural      | 10    | 0.70   | 0.34   | 0.57   |  80.0   % | 480.6    | 646.9   
-comparison      | 10    | 0.90   | 0.69   | 0.85   | 100.0   % | 966.7    | 1212.9  
-summarization   | 10    | 0.70   | 0.46   | 0.61   |  90.0   % | 607.8    | 955.1   
-multi_part      | 10    | 0.80   | 0.49   | 0.80   |  90.0   % | 980.6    | 1206.6  
-metadata_filtered | 10  | 0.90   | 0.90   | 0.90   |  90.0   % | 191.3    | 620.4   
-multi_hop       | 10    | 0.90   | 0.53   | 0.77   |  90.0   % | 1075.9   | 1474.8  
-unanswerable    | 10    | N/A    | N/A    | N/A    | N/A       | 708.3    | 793.6   
-false_premise   | 10    | 0.70   | 0.45   | 0.65   | 100.0   % | 341.2    | 666.7   
-adversarial     | 10    | 0.00   | 0.00   | 0.00   |   0.0   % | 583.1    | 779.2   
+exact           | 10    | 0.80   | 0.43   | 0.73   | 100.0   % | 122.5    | 2189.9  
+conceptual      | 10    | 1.00   | 0.62   | 1.00   | 100.0   % | 657.6    | 938.3   
+procedural      | 10    | 0.90   | 0.40   | 0.69   | 100.0   % | 774.8    | 1008.5  
+comparison      | 10    | 0.90   | 0.71   | 0.85   | 100.0   % | 1404.2   | 1789.3  
+summarization   | 10    | 0.70   | 0.45   | 0.61   |  90.0   % | 1143.9   | 1411.5  
+multi_part      | 10    | 0.80   | 0.50   | 0.80   |  90.0   % | 1214.4   | 1496.9  
+metadata_filtered | 10  | 0.90   | 0.85   | 0.90   |  90.0   % | 194.8    | 905.3   
+multi_hop       | 10    | 1.00   | 0.78   | 0.87   | 100.0   % | 841.2    | 1503.7  
+unanswerable    | 10    | N/A    | N/A    | N/A    | N/A       | 977.4    | 1135.1  
+false_premise   | 10    | 0.70   | 0.44   | 0.65   | 100.0   % | 548.4    | 1155.3  
+adversarial     | 10    | N/A    | N/A    | N/A    | N/A       | 960.5    | 1138.4  
 ---------------------------------------------------------------------------
 ```
 
@@ -262,13 +262,34 @@ A production-grade, reproducible evaluation harness implementing official RAGAS 
 
 | Configuration | Context Precision | Context Recall | Faithfulness | Answer Relevancy | Answer Correctness (Token F1) | Abstention Acc | Mean Latency |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **DENSE** | 0.6028 | 0.3604 | 0.8227 | 0.5284 | 0.1563 | 90.9% | 830.5 ms |
-| **BM25** | 0.6718 | 0.3995 | 0.9379 | 0.5484 | 0.1541 | 94.5% | 1.9 ms |
-| **HYBRID (0.82/0.18 RRF)** | 0.6441 | 0.3629 | 0.7727 | 0.5208 | 0.1586 | 90.0% | 5.1 ms |
-| **HYBRID + RERANK** | **0.6734** | **0.4097** | **0.9803** | **0.5284** | 0.1563 | 90.9% | 131.7 ms |
-| **ADAPTIVE (Production)** | 0.6368 | 0.3697 | 0.7727 | 0.5237 | **0.1617** | 90.0% | 1.9 ms |
+| **DENSE** | 0.5937 | 0.3569 | 0.8561 | 0.5352 | 0.1625 | 97.3% | 1235.8 ms |
+| **BM25** | 0.6445 | 0.3925 | 0.9333 | 0.5503 | 0.1561 | 98.2% | 2.7 ms |
+| **HYBRID (0.82/0.18 RRF)** | 0.6182 | 0.3787 | 0.8000 | 0.5330 | 0.1603 | 98.2% | 12.4 ms |
+| **HYBRID + RERANK** | **0.6462** | **0.4037** | **0.9773** | **0.5352** | 0.1625 | 97.3% | 105.2 ms |
+| **ADAPTIVE (Production)** | 0.6197 | 0.3810 | 0.7909 | 0.5357 | **0.1634** | 97.3% | 3.0 ms |
 
 *Detailed markdown report, bootstrap confidence intervals, and per-query records are maintained in [RAGAS_EVALUATION_REPORT.md](RAGAS_EVALUATION_REPORT.md) and `metadata/ragas_records.csv`.*
+
+#### 5. Official RAGAS LLM-Judge Empirical Validation & Rate-Limit Mitigation
+
+To validate the disparity between offline deterministic token F1 and genuine semantic evaluation, an official RAGAS judge (`qwen/qwen3.8-27b`) was executed with the following findings:
+
+1. **Surface Token F1 vs. Semantic Correctness Gap**:
+   - `exact_01`: Official RAGAS Correctness = **0.9551**, Faithfulness = **1.0000** (vs. Deterministic Token F1 = 0.6667).
+   - `exact_02`: Official RAGAS Correctness = **0.9940**, Faithfulness = **1.0000** (vs. Deterministic Token F1 = 0.8333).
+   - *Cause*: The pipeline generates structured, conversational responses with grounding citations. Unweighted token F1 penalizes longer answers against compact reference strings, whereas the LLM judge evaluates atomic claim truthfulness and cosine embedding similarity.
+
+2. **Groq Rate-Limiting Root Cause & Mitigation**:
+   - Groq's on-demand free tier enforces an Output Tokens Per Minute (OTPM) limit of 1000 tokens.
+   - Standard Ragas configurations default to `max_tokens=1024` with 16 parallel async workers, triggering immediate unretryable `429 - Output tokens limit 1000, requested 1024` errors.
+   - **Resolution**: Setting `ragas_llm.model_args["max_tokens"] = 850` and `RunConfig(max_workers=1, timeout=90)` serializes evaluations to run cleanly under free-tier limits without API rejections.
+
+#### 6. Operating Modes Guide
+
+Production-oriented Adaptive RAG exposes 3 distinct execution profiles:
+- **`mode="fast"`**: Pure lexical BM25 with native pre-filtering. Sub-3ms latency, zero GPU/encoder inference tax, highest precision on keyword-dense queries.
+- **`mode="adaptive"` (Default)**: Confidence-gated hybrid retrieval. Computes statistical confidence and bypasses the cross-encoder reranker when confidence $\ge 0.85$, saving over 800ms of latency per query.
+- **`mode="hybrid_rerank"`**: Maximum quality mode. Triggers multi-query perspective generation and unconditional cross-encoder reranking across top fused candidates. Recommended when context recall is paramount over latency budgets.
 
 ---
 

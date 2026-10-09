@@ -16,5 +16,23 @@
     "deterministic_faithfulness": 1.0,
     "response": "The Transformer encoder stack is composed of **N = 6** identical layers [1].",
     "reference": "The Transformer encoder stack consists of N = 6 identical layers."
+  },
+  {
+    "query_id": "conc_01",
+    "official_answer_correctness": NaN,
+    "deterministic_token_f1": 0.1507,
+    "official_faithfulness": NaN,
+    "deterministic_faithfulness": 0.9286,
+    "response": "Based on the provided sources, self-attention layers and recurrent neural network (RNN) layers differ significantly in terms of computational complexity, sequential operations, path length, and architectural application:\n\n**Computational Complexity and Efficiency**\n*   **Self-Attention:** The per-layer complexity is $O(n^2 \\cdot d)$, where $n$ is the sequence length and $d$ is the representation dimensionality [7]. Self-attention is computationally faster than recurrent layers when the sequence length $n$ is smaller than the representation dimensionality $d$, a condition common in state-of-the-art machine translation models using word-piece or byte-pair representations [1].\n*   **Recurrent Layers:** The per-layer complexity is $O(n \\cdot d^2)$ [7].\n\n**Sequential Operations and Parallelization**\n*   **Self-Attention:** Requires a constant number of sequentially executed operations, denoted as $O(1)$ [1, 7]. This allows for greater parallelizability compared to recurrent models [9].\n*   **Recurrent Layers:** Require $O(n)$ sequential operations, meaning the number of steps grows linearly with the sequence length [1, 7].\n\n**Maximum Path Length**\n*   **Self-Attention:** Has a maximum path length of $O(1)$, meaning it connects all positions directly [1, 7].\n*   **Recurrent Layers:** Have a maximum path length of $O(n)$, as information must pass through each step of the sequence [7].\n\n**Architectural Role**\n*   **Self-Attention:** In the Transformer model, self-attention layers replace recurrent layers entirely in both the encoder and decoder stacks [8, 9]. In the encoder, keys, values, and queries come from the same source (the previous layer's output), allowing each position to attend to all other positions [6]. In the decoder, self-attention is masked to prevent positions from attending to subsequent positions, ensuring predictions depend only on known prior outputs [10].\n*   **Recurrent Layers:** Historically, RNNs (including LSTM and GRU variants) were the state-of-the-art approach for sequence modeling and transduction tasks like language modeling and machine translation [4]. They typically rely on sequence-aligned recurrence to process inputs [5].\n\n**Summary Table from Source [7]:**\n\n| Layer Type | Complexity per Layer | Sequential Operations | Maximum Path Length |\n| :--- | :--- | :--- | :--- |\n| Self-Attention | $O(n^2 \\cdot d)$ | $O(1)$ | $O(1)$ |\n| Recurrent | $O(n \\cdot d^2)$ | $O(n)$ | $O(n)$ |",
+    "reference": "Self-attention connects all positions in O(1) sequential steps with O(n^2 * d) complexity, enabling complete training parallelization, whereas recurrent layers require O(n) sequential steps with O(n * d^2) complexity, creating sequential bottlenecks."
+  },
+  {
+    "query_id": "comp_01",
+    "official_answer_correctness": 0.281,
+    "deterministic_token_f1": 0.0635,
+    "official_faithfulness": 1.0,
+    "deterministic_faithfulness": 1.0,
+    "response": "Based on the retrieved evidence:\n\nThe best\nperforming models also connect the encoder and decoder through an attention\nmechanism. [1]\n\nIn this work we propose the Transformer, a model architecture eschewing recurrence and instead\nrelying entirely on an attention mechanism to draw global dependencies between input and output. [2]\n\nIn the Transformer this is\nreduced to a constant number of operations, albeit at the cost of reduced effective resolution due\nto averaging attention-weighted positions, an effect we counteract with Multi-Head Attention as [3]",
+    "reference": "Self-attention executes in O(1) sequential operations connecting all token positions in parallel, eliminating the sequential layer-stacking required by ConvS2S and achieving significant training speedups."
   }
 ]

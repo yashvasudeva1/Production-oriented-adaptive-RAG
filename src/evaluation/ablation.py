@@ -506,7 +506,7 @@ def run_ablation_suite(
 def print_ablation_table(result: AblationSuiteResult) -> None:
     """Print structured comparison table with Pareto frontier analysis."""
     print("\n" + "=" * 115)
-    print("ResearchLens — Architectural Ablation Study & Pareto Frontier Analysis")
+    print("Production-oriented Adaptive RAG — Architectural Ablation Study & Pareto Frontier Analysis")
     print("=" * 115)
     header = (
         f"{'Configuration':<34} | {'Recall@5':<8} | {'Prec@5':<7} | {'MRR':<6} | "
@@ -534,7 +534,7 @@ def print_ablation_table(result: AblationSuiteResult) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ResearchLens — Ablation Study Runner")
+    parser = argparse.ArgumentParser(description="Production-oriented Adaptive RAG — Ablation Study Runner")
     parser.add_argument("--limit", type=int, default=10, help="Number of evaluation cases to test")
     parser.add_argument("--top-k", type=int, default=5, help="Top-K retrieval depth")
     parser.add_argument("--output", type=str, default=None, help="Output JSON path for ablation results")

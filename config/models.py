@@ -10,7 +10,7 @@ load_dotenv()
 
 @dataclass
 class AppConfig:
-    """Global configuration settings for ResearchLens."""
+    """Global configuration settings for Production-oriented Adaptive RAG."""
     model_name: str = field(default_factory=lambda: os.getenv("MODEL_NAME", "Qwen/Qwen3-8B"))
     embedding_model: str = field(
         default_factory=lambda: os.getenv("EMBEDDING_MODEL", "thenlper/gte-small")

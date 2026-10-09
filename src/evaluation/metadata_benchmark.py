@@ -297,7 +297,7 @@ def run_metadata_benchmark(
 
 def print_results_table(results: List[BenchmarkScenarioResult]) -> None:
     print("\n" + "=" * 105)
-    print("ResearchLens — Native Metadata Filtering Scalability Benchmark")
+    print("Production-oriented Adaptive RAG — Native Metadata Filtering Scalability Benchmark")
     print("=" * 105)
     header = (
         f"{'Scenario':<42} | {'Selectivity':<11} | {'Preds':<5} | "
@@ -334,7 +334,7 @@ def export_csv(results: List[BenchmarkScenarioResult], file_path: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="ResearchLens — Native Metadata Filtering Benchmark"
+        description="Production-oriented Adaptive RAG — Native Metadata Filtering Benchmark"
     )
     parser.add_argument(
         "--num-queries", type=int, default=20, help="Number of benchmark queries per scenario"

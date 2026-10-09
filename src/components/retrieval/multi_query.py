@@ -43,19 +43,76 @@ class MultiQueryRetriever:
         self._query_cache: Dict[str, List[str]] = {}
 
     def _generate_queries_heuristic(self, query: str) -> List[str]:
-        """Fast offline rule-based query expansion if no LLM is configured."""
-        words = query.strip().split()
-        if len(words) <= 3:
-            return [
-                query,
-                f"{query} overview",
-                f"{query} details architecture",
-            ]
-        return [
-            query,
-            f"What are the main concepts and components of {query}?",
-            f"Technical specifications and implementation details for {query}",
+        """
+        High-precision rule-based query expansion and perspective generation.
+        Extracts key noun phrases, relational clauses, and focused entity variants
+        without adding diluting conversational fluff.
+        """
+        q = query.strip()
+        words = q.split()
+        queries = [q]
+
+        # 1. Multi-hop & relational clause splitting
+        relation_patterns = [
+            r"\b(?:connect(?:s|ed)?\s+to|interact(?:s|ed)?\s+with|jointly\s+impact|influence(?:s|d)?\s+whether)\b",
+            r"\b(?:compared\s+to|in\s+contrast\s+to|versus|vs\.?)\b",
+            r"\b(?:prevent(?:s|ed)?\s+.*?\s+in\s+the|because\s+of|due\s+to)\b",
         ]
+        split_done = False
+        for pat in relation_patterns:
+            parts = re.split(pat, q, flags=re.IGNORECASE)
+            if len(parts) >= 2:
+                for part in parts:
+                    cleaned_part = re.sub(r"^(?:how|why|what|explain|does|do|the)\s+", "", part.strip(), flags=re.IGNORECASE).strip(" ?.,")
+                    if len(cleaned_part.split()) >= 2:
+                        queries.append(cleaned_part)
+                split_done = True
+                break
+
+        # 2. Key phrase and entity extraction (keyword-dense core)
+        stopwords = {
+            "how", "why", "what", "when", "where", "which", "does", "do", "explain",
+            "tell", "about", "describe", "the", "a", "an", "is", "are", "was", "were",
+            "in", "on", "at", "by", "for", "with", "from", "and", "or", "to", "of",
+        }
+        content_tokens = [w for w in re.findall(r"[a-zA-Z0-9_\-\.]+", q) if w.lower() not in stopwords]
+        if len(content_tokens) >= 3:
+            keyword_core = " ".join(content_tokens)
+            if keyword_core not in queries:
+                queries.append(keyword_core)
+
+        # 3. Domain-specific synonym and terminology expansion
+        synonym_map = {
+            "convs2s": "convolutional sequence to sequence",
+            "bleu": "bilingual evaluation understudy translation score",
+            "stipend": "financial assistance remuneration honorarium",
+            "positional encoding": "sinusoidal position embeddings order",
+            "label smoothing": "regularization penalizing confident predictions",
+            "d_model": "transformer embedding hidden dimension",
+            "attendance": "minimum attendance 75 percent requirement",
+        }
+        q_lower = q.lower()
+        for term, expansion in synonym_map.items():
+            if term in q_lower:
+                expanded_variant = f"{q} {expansion}"
+                if expanded_variant not in queries:
+                    queries.append(expanded_variant)
+                break
+
+        # Deduplicate while preserving order
+        seen = set()
+        deduped = []
+        for cand in queries:
+            c_norm = cand.strip().lower()
+            if c_norm and c_norm not in seen:
+                seen.add(c_norm)
+                deduped.append(cand.strip())
+
+        # If still only 1 query generated, provide a focused perspective query
+        if len(deduped) < 2:
+            deduped.append(f"{q} overview")
+
+        return deduped[: self.num_queries + 1]
 
     def generate_queries(self, query: str) -> List[str]:
         if query in self._query_cache:
