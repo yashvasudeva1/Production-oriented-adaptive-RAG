@@ -139,9 +139,10 @@ class CrossEncoderReranker:
                 unique_cands[cid] = c
 
         cand_list = list(unique_cands.values())[:k]
+        cand_list.sort(key=lambda c: (_get_field(c, 'dense_score', None) or _get_field(c, 'fusion_score', 0.0) or _get_field(c, 'score', 0.0)), reverse=True)
         results: List[RerankerResult] = []
         for rank, c in enumerate(cand_list, start=1):
-            score = float(_get_field(c, "fusion_score", 0.0) or _get_field(c, "score", 0.0))
+            score = float(_get_field(c, 'dense_score', None) or _get_field(c, 'fusion_score', 0.0) or _get_field(c, 'score', 0.0))
             results.append(
                 RerankerResult(
                     chunk_id=_get_field(c, "chunk_id", ""),

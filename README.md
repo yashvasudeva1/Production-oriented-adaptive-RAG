@@ -182,8 +182,10 @@ $$
 All numbers below were measured on the actual codebase (chunking, Qdrant, BM25, cross-encoder, planning) running on commodity CPU. Latencies are end-to-end unless otherwise noted.
 
 ### 1. Full Production Benchmark Report (110 Cases) — Mode: ADAPTIVE
+> [!NOTE]
+> **Latency scope clarification**: Latency figures in this benchmark include end-to-end wall-clock time including LLM generation (Groq API call). The `benchmark_after_fixes.json` reports **retrieval-only** latencies (P50 ≈ 6ms) excluding generation. The RAGAS evaluation latencies (mean ≈ 3ms) also exclude generative inference.
 
-```
+```text
 ---------------------------------------------------------------------------
 Production-oriented Adaptive RAG — Benchmark Evaluation Report [Mode: ADAPTIVE]
 ---------------------------------------------------------------------------
@@ -301,18 +303,21 @@ python -m src.cli query "What is the Transformer architecture and attention mech
 python main.py
 ```
 
-| Method | Route                 | Description                                      |
-|--------|-----------------------|--------------------------------------------------|
-| GET    | `/health`             | Health check                                     |
-| GET    | `/ready`              | Readiness probe                                  |
-| GET    | `/metrics`            | Index metrics                                    |
-| POST   | `/query`              | Full grounded RAG query                          |
-| POST   | `/search`             | Raw retrieval with metadata filters              |
-| GET    | `/documents`          | List documents                                   |
-| GET    | `/documents/{id}`     | Document details                                 |
-| DELETE | `/documents/{id}`     | Delete document                                  |
-| POST   | `/documents/upload`   | Upload + index                                   |
-| POST   | `/documents/ingest`   | Batch ingest                                     |
+### Core Endpoints
+
+| Method | Route | Description |
+| :--- | :--- | :--- |
+| `GET` | `/health` | Cluster, Qdrant, and Document store health |
+| `GET` | `/ready` | Kubernetes readiness probe |
+| `GET` | `/metrics` | Document counts and index point metrics |
+| `POST` | `/query` | Full grounded RAG query with citations and latency breakdown (blocking) |
+| `POST` | `/query/stream` | Server-Sent Events streaming query — emits `retrieval`, `delta`, and `done` events for progressive rendering |
+| `POST` | `/search` | Raw candidate retrieval with native metadata filtering |
+| `GET` | `/documents` | List all ingested documents |
+| `GET` | `/documents/{id}` | Inspect document lifecycle record |
+| `DELETE` | `/documents/{id}` | Purge document and chunks from Qdrant and BM25 |
+| `POST` | `/documents/upload`| Upload and immediately index a document |
+| `POST` | `/documents/ingest`| Batch ingest and index a directory |
 
 ### Example Query Request (`POST /query`)
 

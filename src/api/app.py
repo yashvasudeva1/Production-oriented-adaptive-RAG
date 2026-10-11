@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..components.chunking import ChunkingPipeline
 from ..components.indexing import (
@@ -165,6 +166,103 @@ def query(request: QueryRequest) -> QueryResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred while processing the query: {str(exc)}",
         )
+
+
+@app.post("/query/stream")
+async def query_stream(request: QueryRequest) -> StreamingResponse:
+    """
+    Streaming SSE endpoint for grounded RAG queries.
+    Emits three event types:
+      - ``retrieval``: Sent after retrieval completes with confidence and source metadata.
+      - ``delta``: One event per 6-char chunk of the generated answer for progressive rendering.
+      - ``done``: Final event with the full structured payload, citations, and latency breakdown.
+    """
+    if not request.query or not request.query.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Query cannot be empty."
+        )
+
+    async def _event_stream() -> AsyncGenerator[str, None]:
+        import asyncio
+        import concurrent.futures
+
+        loop = asyncio.get_event_loop()
+
+        def _run_query():
+            return state.orchestrator.query(
+                query=request.query,
+                document_ids=request.document_ids,
+                mode=request.mode,
+            )
+
+        try:
+            # Run the blocking orchestrator call in a thread pool to keep the event loop free
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                res = await loop.run_in_executor(pool, _run_query)
+
+            # Event 1: Retrieval metadata — emitted before token streaming starts
+            retrieval_event = {
+                "event": "retrieval",
+                "confidence": res.confidence,
+                "execution_mode": res.execution_mode,
+                "query_type": res.query_type,
+                "abstained": res.abstained,
+                "abstention_reason": res.abstention_reason,
+                "source_count": len(res.sources),
+                "latency_retrieval_ms": res.retrieval.latency_breakdown_ms.get(
+                    "hybrid_retrieval_ms",
+                    res.retrieval.latency_breakdown_ms.get("fast_retrieval_ms", 0.0),
+                ),
+            }
+            yield f"data: {json.dumps(retrieval_event)}\n\n"
+
+            # Event 2: Delta tokens — stream the answer text in 6-character word-group chunks
+            answer = res.answer or ""
+            chunk_size = 6
+            for i in range(0, len(answer), chunk_size):
+                yield f"data: {json.dumps({'event': 'delta', 'text': answer[i: i + chunk_size]})}\n\n"
+                await asyncio.sleep(0)  # Yield to flush without blocking
+
+            # Event 3: Done — full structured payload
+            sources_out = [
+                {
+                    "citation_id": s.get("citation_id", 0),
+                    "document_id": s.get("document_id", ""),
+                    "filename": s.get("filename", ""),
+                    "chunk_id": s.get("chunk_id", ""),
+                    "page": s.get("page"),
+                    "section": s.get("section"),
+                    "snippet": s.get("snippet", ""),
+                }
+                for s in res.sources
+            ]
+            done_event = {
+                "event": "done",
+                "query": res.query,
+                "answer": answer,
+                "confidence": res.confidence,
+                "abstained": res.abstained,
+                "abstention_reason": res.abstention_reason,
+                "sources": sources_out,
+                "citation_validation": res.citation_validation,
+                "latency_ms": res.latency_ms,
+                "retrieval": res.retrieval.model_dump(),
+            }
+            yield f"data: {json.dumps(done_event)}\n\n"
+
+        except Exception as exc:
+            logger.error(f"Streaming query error: {exc}", exc_info=True)
+            yield f"data: {json.dumps({'event': 'error', 'detail': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.post("/search", response_model=SearchResponse)

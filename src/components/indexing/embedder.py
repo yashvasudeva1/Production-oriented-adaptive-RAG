@@ -81,7 +81,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
 
     def __init__(
         self,
-        model_name: str = "thenlper/gte-small",
+        model_name: str = "BAAI/bge-small-en-v1.5",
         device: str = "cpu",
         batch_size: int = 32,
     ) -> None:
@@ -151,6 +151,10 @@ class SentenceTransformerEmbedder(BaseEmbedder):
 
     def embed_query(self, query: str) -> List[float]:
         q_clean = query.strip()
+        # BGE models require a task-specific prefix for query embeddings to boost retrieval quality.
+        # This is a no-op for non-BGE models since the text content is unchanged after prefix removal.
+        if "bge" in self.model_name.lower():
+            q_clean = f"Represent this sentence for searching relevant passages: {q_clean}"
         from ..cache import CacheManager
         cache = CacheManager.get_instance()
         cached = cache.get_embedding(self.model_name, q_clean)

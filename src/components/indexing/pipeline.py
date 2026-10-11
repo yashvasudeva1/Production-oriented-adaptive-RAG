@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from typing import List, Optional, Sequence
@@ -71,6 +72,38 @@ class IndexingPipeline:
                         doc.document_id, status="FAILED", error_message="No text chunks generated"
                     )
                     continue
+
+                # Prepend a document-level summary chunk for improved summarization recall.
+                # The summary is built from the first 600 characters of the top 3 unique chunks,
+                # giving retrieval a holistic "overview" anchor without LLM inference cost.
+                try:
+                    seen_texts = set()
+                    summary_parts = []
+                    for c in chunks:
+                        key = c.text[:80]
+                        if key not in seen_texts and len(summary_parts) < 3:
+                            seen_texts.add(key)
+                            summary_parts.append(c.text[:200])
+                    if summary_parts:
+                        from ..chunking.models import Chunk
+                        summary_text = " [...] ".join(summary_parts)
+                        summary_id = hashlib.md5(
+                            f"summary:{doc.document_id}".encode()
+                        ).hexdigest()[:16]
+                        summary_chunk = Chunk(
+                            chunk_id=f"summary_{summary_id}",
+                            document_id=doc.document_id,
+                            text=summary_text,
+                            chunk_type="summary",
+                            parent_id=None,
+                            source_locator=chunks[0].source_locator if chunks else None,
+                            page=None,
+                            section="Document Overview",
+                            metadata={**doc.metadata, "is_summary": True},
+                        )
+                        chunks = [summary_chunk] + list(chunks)
+                except Exception as _sum_exc:
+                    logger.debug(f"Summary chunk generation skipped: {_sum_exc}")
 
                 # Cache raw parent chunk text so parent-child retrieval can expand without re-reading files
                 for c in chunks:

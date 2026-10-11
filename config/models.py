@@ -13,7 +13,7 @@ class AppConfig:
     """Global configuration settings for Production-oriented Adaptive RAG."""
     model_name: str = field(default_factory=lambda: os.getenv("MODEL_NAME", "Qwen/Qwen3-8B"))
     embedding_model: str = field(
-        default_factory=lambda: os.getenv("EMBEDDING_MODEL", "thenlper/gte-small")
+        default_factory=lambda: os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
     )
     reranker_model: str = field(
         default_factory=lambda: os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
@@ -43,7 +43,7 @@ class AppConfig:
         default_factory=lambda: os.getenv("CONDITIONAL_RERANKING_ENABLED", "true").lower() in ("true", "1", "yes")
     )
     confidence_high_threshold: float = field(
-        default_factory=lambda: float(os.getenv("CONFIDENCE_HIGH_THRESHOLD", "0.85"))
+        default_factory=lambda: float(os.getenv("CONFIDENCE_HIGH_THRESHOLD", "0.92"))
     )
     confidence_medium_threshold: float = field(
         default_factory=lambda: float(os.getenv("CONFIDENCE_MEDIUM_THRESHOLD", "0.60"))
