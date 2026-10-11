@@ -233,8 +233,16 @@ class RetrievalFilter(BaseModel):
             raw_field = cond.get_raw_field_name()
             actual_val = _extract_val(chunk, raw_field)
             if actual_val is None:
-                # Also try top level if raw_field wasn't prefixed
                 actual_val = _extract_val(chunk, cond.field)
+
+            if actual_val is None:
+                # If document_ids scoping was already applied from metadata filtering,
+                # do not reject the chunk because document-level properties are already verified
+                if self.document_ids and raw_field in (
+                    "organizations", "dates", "document_type", "department", "locations"
+                ):
+                    continue
+                return False
 
             if not _evaluate_operator(actual_val, cond.operator, cond.value):
                 return False

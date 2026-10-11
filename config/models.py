@@ -43,7 +43,7 @@ class AppConfig:
         default_factory=lambda: os.getenv("CONDITIONAL_RERANKING_ENABLED", "true").lower() in ("true", "1", "yes")
     )
     confidence_high_threshold: float = field(
-        default_factory=lambda: float(os.getenv("CONFIDENCE_HIGH_THRESHOLD", "0.92"))
+        default_factory=lambda: float(os.getenv("CONFIDENCE_HIGH_THRESHOLD", "0.85"))
     )
     confidence_medium_threshold: float = field(
         default_factory=lambda: float(os.getenv("CONFIDENCE_MEDIUM_THRESHOLD", "0.60"))

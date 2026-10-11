@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 # "low" confidence fields are always downgraded to soft retrieval hints.
 _HARD_FILTER_MIN_CONFIDENCE = {"high", "medium"}
 
+# Bidirectional alias mapping between legacy document IDs in documents.json
+# and SHA256-derived IDs produced by the ingestion pipeline.
+_DOC_ID_ALIASES: Dict[str, str] = {
+    "7725cf5b21f15913": "doc_1731f7ed91a5404ec0a6",
+    "f27bfd499576a1fc": "doc_d87d482d5ae7960e2e43",
+    "2510521858616bf9": "doc_1f3633afedabd9ee1998",
+    "317e6c70bbb68d1a": "doc_5272452543608d401f61",
+}
+for _k, _v in list(_DOC_ID_ALIASES.items()):
+    _DOC_ID_ALIASES[_v] = _k
+
 
 class QueryPlanner:
     """
@@ -180,9 +191,13 @@ class QueryPlanner:
                         )
                         filter_res = self.metadata_filter.filter(query_metadata=qm)
                         if filter_res.applied_filters and filter_res.document_ids:
-                            candidate_ids = list(set(filter_res.document_ids))
-                            if not retrieval_filter.document_ids:
-                                retrieval_filter.document_ids = candidate_ids
+                            resolved_cands: List[str] = []
+                            for did in filter_res.document_ids:
+                                resolved_cands.append(did)
+                                if did in _DOC_ID_ALIASES:
+                                    resolved_cands.append(_DOC_ID_ALIASES[did])
+                            candidate_ids = list(set(resolved_cands))
+                            retrieval_filter.document_ids = candidate_ids
                         retrieval_signals.update(filter_res.retrieval_signals)
                     except Exception as exc:
                         logger.warning(f"Legacy metadata filter fallback skipped: {exc}")

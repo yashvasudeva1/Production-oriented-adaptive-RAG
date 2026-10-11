@@ -29,8 +29,8 @@ class EvidenceGate:
     def __init__(
         self,
         min_supporting_chunks: int = 1,
-        min_confidence: float = 0.25,
-        min_rerank_threshold: float = -3.0,
+        min_confidence: float = 0.20,
+        min_rerank_threshold: float = -5.5,
     ) -> None:
         self.min_supporting_chunks = min_supporting_chunks
         self.min_confidence = min_confidence
@@ -129,8 +129,8 @@ class EvidenceGate:
         if (
             len(overlap_words) == 0
             or (len(overlap_words) < 2 and len(key_q_words) >= 3)
-            or overlap_ratio < 0.30
-            or (len(key_q_words) >= 3 and max_chunk_overlap < 2 and overlap_ratio < 0.40)
+            or overlap_ratio < 0.22
+            or (len(key_q_words) >= 3 and max_chunk_overlap < 2 and overlap_ratio < 0.30)
         ):
             return EvidenceVerdict(
                 allowed=False,

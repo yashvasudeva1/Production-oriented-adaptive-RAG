@@ -127,11 +127,16 @@ class RAGOrchestrator:
             base_retriever=self.dense_retriever
         )
 
-        self.reranker = reranker or CrossEncoderReranker()
+        self.reranker = reranker or CrossEncoderReranker(
+            confidence_threshold=self.config.confidence_high_threshold
+        )
         self.context_filter = context_filter or ContextFilter()
         self.evidence_gate = evidence_gate or EvidenceGate()
         self.generator = generator or GroundedGenerator()
-        self.confidence_scorer = confidence_scorer or RetrievalConfidenceScorer()
+        self.confidence_scorer = confidence_scorer or RetrievalConfidenceScorer(
+            confidence_high_threshold=self.config.confidence_high_threshold,
+            confidence_medium_threshold=self.config.confidence_medium_threshold,
+        )
 
     def _search_keyword(
         self,
