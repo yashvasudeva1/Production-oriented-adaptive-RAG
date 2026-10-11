@@ -44,8 +44,13 @@ class SystemRegistry:
             with cls._lock:
                 if cls._embedder is None:
                     cfg = cls.get_config()
-                    logger.info("Initializing shared SentenceTransformerEmbedder")
-                    cls._embedder = SentenceTransformerEmbedder(model_name=cfg.embedding_model)
+                    logger.info(
+                        f"Initializing shared SentenceTransformerEmbedder ({cfg.embedding_model} on {cfg.embedding_device})"
+                    )
+                    cls._embedder = SentenceTransformerEmbedder(
+                        model_name=cfg.embedding_model,
+                        device=cfg.embedding_device,
+                    )
         return cls._embedder
 
     @classmethod
@@ -54,8 +59,13 @@ class SystemRegistry:
             with cls._lock:
                 if cls._reranker is None:
                     cfg = cls.get_config()
-                    logger.info("Initializing shared CrossEncoderReranker")
-                    cls._reranker = CrossEncoderReranker(model_name=cfg.reranker_model)
+                    logger.info(
+                        f"Initializing shared CrossEncoderReranker ({cfg.reranker_model} on {cfg.reranker_device})"
+                    )
+                    cls._reranker = CrossEncoderReranker(
+                        model_name=cfg.reranker_model,
+                        device=cfg.reranker_device,
+                    )
         return cls._reranker
 
     @classmethod

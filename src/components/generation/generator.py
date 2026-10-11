@@ -44,6 +44,41 @@ class GroundedGenerator:
         self.citation_builder = CitationBuilder()
         self.citation_validator = CitationValidator()
 
+        # Initialize resilient provider router
+        from .providers import ProviderRouter
+
+        effective_primary = self.provider.lower()
+        if effective_primary == "auto":
+            if os.getenv("GROQ_API_KEY"):
+                effective_primary = "groq"
+            elif os.getenv("GEMINI_API_KEY"):
+                effective_primary = "gemini"
+            elif os.getenv("OPENROUTER_API_KEY"):
+                effective_primary = "openrouter"
+            else:
+                effective_primary = "offline"
+
+        default_model = self.model_name or (
+            "llama-3.3-70b-versatile" if effective_primary == "groq"
+            else "gemini-1.5-flash" if effective_primary == "gemini"
+            else "meta-llama/llama-3.2-3b-instruct:free" if effective_primary == "openrouter"
+            else "extractive-deterministic"
+        )
+
+        fallback_prov = os.getenv("LLM_FALLBACK_PROVIDER", "offline")
+        fallback_mdl = os.getenv("LLM_FALLBACK_MODEL", "")
+        timeout = float(os.getenv("LLM_TIMEOUT", "10.0"))
+        max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
+
+        self.router = ProviderRouter(
+            primary_provider=effective_primary,
+            primary_model=default_model,
+            fallback_provider=fallback_prov,
+            fallback_model=fallback_mdl,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+
     def generate(
         self,
         query: str,
@@ -55,6 +90,7 @@ class GroundedGenerator:
                 "answer": "No supporting evidence was found to answer the query.",
                 "sources": [],
                 "validation": {"is_valid": True, "details": "No evidence supplied."},
+                "metadata": {"provider": "none", "model": "none", "latency_ms": 0.0},
             }
 
         sources = self.citation_builder.build_sources(supporting_chunks)
@@ -62,7 +98,14 @@ class GroundedGenerator:
             sources, supporting_chunks
         )
 
-        answer_text = self._call_llm(query, formatted_context, sources, supporting_chunks)
+        prompt = f"Sources:\n{formatted_context}\n\nQuestion: {query}"
+        llm_res = self.router.generate(
+            prompt=prompt,
+            system_prompt=SYSTEM_PROMPT,
+            temperature=self.temperature,
+        )
+        answer_text = llm_res.text
+
         validation_report = self.citation_validator.validate(
             answer_text, sources, supporting_chunks
         )
@@ -71,6 +114,13 @@ class GroundedGenerator:
             "answer": answer_text,
             "sources": [s.model_dump() for s in sources],
             "validation": validation_report.model_dump(),
+            "metadata": {
+                "provider": llm_res.provider,
+                "model": llm_res.model,
+                "latency_ms": round(llm_res.latency_ms, 2),
+                "is_fallback": llm_res.is_fallback,
+                "tokens_used": llm_res.tokens_used,
+            },
         }
 
     def _call_llm(
@@ -80,87 +130,13 @@ class GroundedGenerator:
         sources: Sequence[CitationSource],
         supporting_chunks: Sequence[RerankerResult],
     ) -> str:
-        # Fast path for offline evaluation, CI, and testing
-        if os.getenv("OFFLINE_EVAL", "0").lower() in ("1", "true", "yes") or self.provider == "offline":
-            return self._offline_extractive_synthesis(query, sources, supporting_chunks)
-
-        # Try configured API providers
-        groq_key = os.getenv("GROQ_API_KEY")
-        openrouter_key = os.getenv("OPENROUTER_API_KEY")
-
-        if (self.provider == "groq" or self.provider == "auto") and groq_key:
-            import requests
-            groq_models = [self.model_name] if self.model_name else [
-                os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b"),
-                "openai/gpt-oss-20b",
-            ]
-            for m in groq_models:
-                if not m:
-                    continue
-                try:
-                    headers = {
-                        "Authorization": f"Bearer {groq_key}",
-                        "Content-Type": "application/json",
-                    }
-                    payload = {
-                        "model": m,
-                        "messages": [
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {
-                                "role": "user",
-                                "content": f"Sources:\n{formatted_context}\n\nQuestion: {query}",
-                            },
-                        ],
-                        "temperature": self.temperature,
-                    }
-                    resp = requests.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers=headers,
-                        json=payload,
-                        timeout=5,
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        return data["choices"][0]["message"]["content"].strip()
-                    elif resp.status_code in (401, 403, 404, 429):
-                        logger.warning(f"Groq API returned HTTP {resp.status_code}; skipping network retry.")
-                        break
-                except Exception as exc:
-                    logger.warning(f"Groq generation failed with model {m}: {exc}")
-                    break
-
-        if (self.provider == "openrouter" or self.provider == "auto") and openrouter_key:
-            try:
-                import requests
-                headers = {
-                    "Authorization": f"Bearer {openrouter_key}",
-                    "Content-Type": "application/json",
-                }
-                payload = {
-                    "model": self.model_name or "meta-llama/llama-3.1-8b-instruct:free",
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {
-                            "role": "user",
-                            "content": f"Sources:\n{formatted_context}\n\nQuestion: {query}",
-                        },
-                    ],
-                    "temperature": self.temperature,
-                }
-                resp = requests.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=5,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data["choices"][0]["message"]["content"].strip()
-            except Exception as exc:
-                logger.warning(f"OpenRouter generation failed: {exc}")
-
-        # Deterministic offline extractive synthesis
-        return self._offline_extractive_synthesis(query, sources, supporting_chunks)
+        prompt = f"Sources:\n{formatted_context}\n\nQuestion: {query}"
+        res = self.router.generate(
+            prompt=prompt,
+            system_prompt=SYSTEM_PROMPT,
+            temperature=self.temperature,
+        )
+        return res.text
 
     def _offline_extractive_synthesis(
         self,

@@ -94,9 +94,9 @@ class TestMetadataExtractorConfidence:
     """Rule-based extractor annotates fields with confidence levels after fix."""
 
     @pytest.fixture(autouse=True)
-    def extractor(self):
+    def extractor(self, monkeypatch):
         """Load AdaptiveQueryMetadataExtractor via importlib, stubbing heavy deps."""
-        os.environ["OFFLINE_EVAL"] = "1"
+        monkeypatch.setenv("OFFLINE_EVAL", "1")
 
         stubs = {
             "langchain_groq": mock.MagicMock(),

@@ -71,7 +71,13 @@ def cmd_ingest(args):
         print(f"Error: Path does not exist: {path}", file=sys.stderr)
         sys.exit(1)
 
-    ingestion_pipe, indexing_pipe, _, _, _, _ = get_system()
+    ingestion_pipe, indexing_pipe, _, qdrant, bm25, doc_store = get_system()
+
+    if getattr(args, "rebuild_index", False):
+        print("Rebuilding indexes (clearing Qdrant collection, BM25, and DocumentStore)...")
+        qdrant.recreate_collection()
+        bm25.clear()
+        doc_store.clear()
 
     if path.is_file():
         files = [path]
@@ -83,7 +89,8 @@ def cmd_ingest(args):
     print(f"Parsed {len(ingest_result.documents)} documents. Indexing...")
 
     stats = indexing_pipe.index_documents(
-        ingest_result.documents, force_reindex=args.force
+        ingest_result.documents,
+        force_reindex=args.force or getattr(args, "rebuild_index", False),
     )
     print(
         f"Indexed {stats.documents_indexed} documents ({stats.chunks_indexed} chunks) "
@@ -151,6 +158,11 @@ def main():
     p_ingest.add_argument("path", help="Path to document file or directory")
     p_ingest.add_argument(
         "--force", action="store_true", help="Force reindexing existing documents"
+    )
+    p_ingest.add_argument(
+        "--rebuild-index",
+        action="store_true",
+        help="Rebuild Qdrant collection, BM25, and metadata matching active embedder dimension",
     )
 
     # search

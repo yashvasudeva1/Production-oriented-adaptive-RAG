@@ -35,6 +35,11 @@ DEFAULT_PAYLOAD_INDEXES: Dict[str, qmodels.PayloadSchemaType] = {
 }
 
 
+class IncompatibleCollectionError(Exception):
+    """Raised when an existing collection vector dimension or distance does not match the active embedder."""
+    pass
+
+
 class QdrantIndexer:
     """
     Production Qdrant indexer supporting collection management,
@@ -112,7 +117,7 @@ class QdrantIndexer:
         return indexed_fields
 
     def ensure_collection(self) -> None:
-        """Create collection if it does not already exist and initialize payload indexes."""
+        """Create collection if it does not already exist, or validate existing vector configuration."""
         if getattr(self, "_collection_verified", False):
             return
         try:
@@ -129,11 +134,39 @@ class QdrantIndexer:
                 logger.info(
                     f"Created Qdrant collection: {self.collection_name} (size: {self.vector_size})"
                 )
+            else:
+                # Validate existing collection vector dimension
+                coll_info = self.client.get_collection(self.collection_name)
+                vectors_cfg = getattr(coll_info.config.params, "vectors", None)
+                if isinstance(vectors_cfg, qmodels.VectorParams):
+                    existing_dim = vectors_cfg.size
+                    if existing_dim != self.vector_size:
+                        raise IncompatibleCollectionError(
+                            f"Collection '{self.collection_name}' has vector dimension {existing_dim}, "
+                            f"but active embedder produces dimension {self.vector_size}. "
+                            "Incompatible vector spaces cannot be mixed. "
+                            "Run 'python -m src.cli ingest --rebuild-index' or call recreate_collection() to rebuild."
+                        )
             if self.create_indexes:
                 self.create_payload_indexes()
             self._collection_verified = True
         except Exception as exc:
+            if isinstance(exc, IncompatibleCollectionError):
+                raise
             logger.error(f"Error ensuring Qdrant collection: {exc}")
+
+    def recreate_collection(self) -> None:
+        """Safely delete and recreate the collection with the current vector size."""
+        try:
+            collections = self.client.get_collections().collections
+            if any(c.name == self.collection_name for c in collections):
+                self.client.delete_collection(self.collection_name)
+                logger.info(f"Deleted existing Qdrant collection '{self.collection_name}'")
+        except Exception as exc:
+            logger.warning(f"Error deleting collection '{self.collection_name}': {exc}")
+
+        self._collection_verified = False
+        self.ensure_collection()
 
     def upsert_chunks(
         self,
@@ -157,6 +190,11 @@ class QdrantIndexer:
 
             points: List[qmodels.PointStruct] = []
             for chunk, vec in zip(batch_chunks, batch_embeddings):
+                if len(vec) != self.vector_size:
+                    raise ValueError(
+                        f"Vector dimension mismatch for chunk '{chunk.chunk_id}': "
+                        f"got {len(vec)}, expected {self.vector_size}"
+                    )
                 # Deterministic point UUID from chunk_id
                 point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk.chunk_id))
                 payload = {
