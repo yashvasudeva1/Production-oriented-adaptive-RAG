@@ -15,6 +15,9 @@ class AppConfig:
     embedding_model: str = field(
         default_factory=lambda: os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
     )
+    embedding_dimension: Optional[int] = field(
+        default_factory=lambda: int(os.getenv("EMBEDDING_DIMENSION", "768")) if os.getenv("EMBEDDING_DIMENSION") else None
+    )
     reranker_model: str = field(
         default_factory=lambda: os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
     )
@@ -123,6 +126,8 @@ class AppConfig:
             warnings.append(f"Invalid HNSW_FULL_SCAN_THRESHOLD: {self.hnsw_full_scan_threshold}. Must be >= 0.")
         if self.hnsw_ef_search is not None and self.hnsw_ef_search <= 0:
             warnings.append(f"Invalid HNSW_EF_SEARCH: {self.hnsw_ef_search}. Must be > 0.")
+        if self.embedding_dimension is not None and self.embedding_dimension <= 0:
+            warnings.append(f"Invalid EMBEDDING_DIMENSION: {self.embedding_dimension}. Must be > 0.")
         return warnings
 
 

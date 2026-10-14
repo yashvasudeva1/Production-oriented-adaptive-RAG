@@ -8,7 +8,7 @@ from typing import Optional
 from config.models import AppConfig
 from .indexing.bm25_indexer import BM25Indexer
 from .indexing.document_store import DocumentStore
-from .indexing.embedder import SentenceTransformerEmbedder
+from .indexing.embedder import BaseEmbedder, GeminiEmbedder, SentenceTransformerEmbedder
 from .indexing.qdrant_indexer import QdrantIndexer
 from .reranker import CrossEncoderReranker
 
@@ -23,7 +23,7 @@ class SystemRegistry:
     """
 
     _lock = threading.RLock()
-    _embedder: Optional[SentenceTransformerEmbedder] = None
+    _embedder: Optional[BaseEmbedder] = None
     _reranker: Optional[CrossEncoderReranker] = None
     _qdrant: Optional[QdrantIndexer] = None
     _bm25: Optional[BM25Indexer] = None
@@ -39,18 +39,30 @@ class SystemRegistry:
         return cls._config
 
     @classmethod
-    def get_embedder(cls) -> SentenceTransformerEmbedder:
+    def get_embedder(cls) -> BaseEmbedder:
         if cls._embedder is None:
             with cls._lock:
                 if cls._embedder is None:
                     cfg = cls.get_config()
-                    logger.info(
-                        f"Initializing shared SentenceTransformerEmbedder ({cfg.embedding_model} on {cfg.embedding_device})"
-                    )
-                    cls._embedder = SentenceTransformerEmbedder(
-                        model_name=cfg.embedding_model,
-                        device=cfg.embedding_device,
-                    )
+                    m_lower = cfg.embedding_model.lower()
+                    if "gemini" in m_lower and "embeddinggemma" not in m_lower:
+                        dim = getattr(cfg, "embedding_dimension", None) or 768
+                        logger.info(
+                            f"Initializing shared GeminiEmbedder ({cfg.embedding_model}, dim: {dim})"
+                        )
+                        cls._embedder = GeminiEmbedder(
+                            model_name=cfg.embedding_model,
+                            api_key=cfg.gemini_api_key or os.getenv("GEMINI_API_KEY", ""),
+                            dimension=dim,
+                        )
+                    else:
+                        logger.info(
+                            f"Initializing shared SentenceTransformerEmbedder ({cfg.embedding_model} on {cfg.embedding_device})"
+                        )
+                        cls._embedder = SentenceTransformerEmbedder(
+                            model_name=cfg.embedding_model,
+                            device=cfg.embedding_device,
+                        )
         return cls._embedder
 
     @classmethod

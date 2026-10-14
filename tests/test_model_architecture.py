@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 from src.components.indexing.embedder import (
     SentenceTransformerEmbedder,
+    GeminiEmbedder,
+    BaseEmbedder,
     MockEmbedder,
     TASK_PREFIXES,
 )
@@ -52,6 +54,13 @@ def test_embedder_prompt_prefixing():
     gte_embedder = SentenceTransformerEmbedder(model_name="thenlper/gte-small")
     q_gte = gte_embedder.format_text("What is quantum computing?", is_query=True)
     assert q_gte == "What is quantum computing?"
+
+    # Test EmbeddingGemma-2 prefixing
+    gemma_embedder = SentenceTransformerEmbedder(model_name="google/embeddinggemma-2")
+    q_gemma = gemma_embedder.format_text("What is quantum computing?", is_query=True)
+    assert q_gemma == "task: search result | query: What is quantum computing?"
+    doc_gemma = gemma_embedder.format_text("Quantum computing uses qubits.", is_query=False)
+    assert doc_gemma == "title: none | text: Quantum computing uses qubits."
 
 
 def test_embedder_strict_failure_in_production(monkeypatch):
@@ -214,3 +223,76 @@ def test_app_config_hnsw_validation():
     invalid_cfg = AppConfig(hnsw_m=0, hnsw_ef_construct=-10, hnsw_full_scan_threshold=-1, hnsw_ef_search=0)
     invalid_warnings = [w for w in invalid_cfg.validate() if "HNSW" in w]
     assert len(invalid_warnings) == 4
+
+
+def test_gemini_embedder_api_key_required(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("ALLOW_MOCK_EMBEDDER", "0")
+    monkeypatch.setenv("OFFLINE_EVAL", "0")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        GeminiEmbedder(api_key="")
+    assert "GEMINI_API_KEY environment variable is required" in str(exc_info.value)
+
+
+def test_gemini_embedder_mocked_calls():
+    embedder = GeminiEmbedder(
+        model_name="models/gemini-embedding-2",
+        api_key="test-key-12345",
+        dimension=4,
+    )
+    assert embedder.dimension == 4
+
+    # Test embed_query mocked
+    with patch.object(embedder, "_call_api", return_value={"embedding": {"values": [0.5, 0.5, 0.5, 0.5]}}):
+        q_vec = embedder.embed_query("quantum computing")
+        assert len(q_vec) == 4
+        assert q_vec == [0.5, 0.5, 0.5, 0.5]
+
+    # Test embed_texts mocked
+    with patch.object(
+        embedder,
+        "_call_api",
+        return_value={"embeddings": [{"values": [0.1, 0.2, 0.3, 0.4]}, {"values": [0.5, 0.6, 0.7, 0.8]}]},
+    ):
+        doc_vecs = embedder.embed_texts(["doc1", "doc2"])
+        assert len(doc_vecs) == 2
+        assert len(doc_vecs[0]) == 4
+        assert len(doc_vecs[1]) == 4
+
+
+def test_system_registry_embedder_routing(monkeypatch):
+    from src.components.registry import SystemRegistry
+
+    # Reset registry cache
+    with SystemRegistry._lock:
+        SystemRegistry._embedder = None
+        SystemRegistry._config = None
+
+    # Test Gemini routing
+    monkeypatch.setenv("EMBEDDING_MODEL", "models/gemini-embedding-2")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-xyz")
+    gemini_inst = SystemRegistry.get_embedder()
+    assert isinstance(gemini_inst, GeminiEmbedder)
+
+    # Reset and test SentenceTransformer routing
+    with SystemRegistry._lock:
+        SystemRegistry._embedder = None
+        SystemRegistry._config = None
+
+    monkeypatch.setenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+    st_inst = SystemRegistry.get_embedder()
+    assert isinstance(st_inst, SentenceTransformerEmbedder)
+
+
+def test_app_config_embedding_dimension_validation():
+    from config.models import AppConfig
+
+    valid_cfg = AppConfig(embedding_dimension=768)
+    assert len([w for w in valid_cfg.validate() if "EMBEDDING_DIMENSION" in w]) == 0
+
+    invalid_cfg = AppConfig(embedding_dimension=-1)
+    warnings = [w for w in invalid_cfg.validate() if "EMBEDDING_DIMENSION" in w]
+    assert len(warnings) == 1
+    assert "Invalid EMBEDDING_DIMENSION" in warnings[0]
+
