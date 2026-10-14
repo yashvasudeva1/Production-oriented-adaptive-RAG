@@ -31,6 +31,8 @@ try:
 except ImportError:
     from ....config.models import AppConfig, get_config
 
+from ..registry import SystemRegistry
+
 logger = logging.getLogger(__name__)
 
 
@@ -103,11 +105,11 @@ class RAGOrchestrator:
         config: Optional[AppConfig] = None,
     ) -> None:
         self.config = config or get_config()
-        self.doc_store = document_store or DocumentStore()
+        self.doc_store = document_store or SystemRegistry.get_doc_store()
         self.planner = query_planner or QueryPlanner(document_store=self.doc_store)
-        self.embedder = embedder or SentenceTransformerEmbedder()
-        self.qdrant = qdrant_indexer or QdrantIndexer(vector_size=self.embedder.dimension)
-        self.bm25 = bm25_indexer or BM25Indexer()
+        self.embedder = embedder or SystemRegistry.get_embedder()
+        self.qdrant = qdrant_indexer or SystemRegistry.get_qdrant()
+        self.bm25 = bm25_indexer or SystemRegistry.get_bm25()
 
         self.dense_retriever = DenseRetriever(
             indexer=self.qdrant, embedder=self.embedder
@@ -127,9 +129,7 @@ class RAGOrchestrator:
             base_retriever=self.dense_retriever
         )
 
-        self.reranker = reranker or CrossEncoderReranker(
-            confidence_threshold=self.config.confidence_high_threshold
-        )
+        self.reranker = reranker or SystemRegistry.get_reranker()
         self.context_filter = context_filter or ContextFilter()
         self.evidence_gate = evidence_gate or EvidenceGate()
         self.generator = generator or GroundedGenerator()

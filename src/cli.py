@@ -28,11 +28,14 @@ from .components.ingestion.pipeline import IngestionPipeline as DocIngestionPipe
 from .components.orchestration import RAGOrchestrator
 
 
+from .components.registry import SystemRegistry
+
+
 def get_system():
-    embedder = SentenceTransformerEmbedder()
-    qdrant = QdrantIndexer(vector_size=embedder.dimension)
-    bm25 = BM25Indexer()
-    doc_store = DocumentStore()
+    embedder = SystemRegistry.get_embedder()
+    qdrant = SystemRegistry.get_qdrant()
+    bm25 = SystemRegistry.get_bm25()
+    doc_store = SystemRegistry.get_doc_store()
     chunker = ChunkingPipeline()
     indexing_pipe = IndexingPipeline(
         embedder=embedder,

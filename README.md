@@ -262,17 +262,17 @@ Latency Distribution (Full Execution on Commodity CPU):
 
 Pre-filtering yields up to ~3.9× higher throughput on selective queries compared with unfiltered scans.
 
-### 4. Comparative Configuration Matrix (110 Cases)
+### 4. Comparative Configuration Matrix (110 Cases - Post-HNSW Implementation)
 
 | Configuration              | Context Precision | Context Recall | Faithfulness | Answer Relevancy | Answer Correctness (Token F1) | Abstention Acc | Mean Latency |
 |----------------------------|-------------------|----------------|--------------|------------------|-------------------------------|----------------|--------------|
-| **DENSE**                  | 0.5937            | 0.3569         | 0.8561       | 0.5352           | 0.1625                        | 97.3%          | 1235.8 ms    |
-| **BM25**                   | 0.6445            | 0.3925         | 0.9333       | 0.5503           | 0.1561                        | 98.2%          | 2.7 ms       |
-| **HYBRID (0.82/0.18 RRF)** | 0.6182            | 0.3787         | 0.8000       | 0.5330           | 0.1603                        | 98.2%          | 12.4 ms      |
-| **HYBRID + RERANK**        | **0.6462**        | **0.4037**     | **0.9773**   | **0.5352**       | 0.1625                        | 97.3%          | 105.2 ms     |
-| **ADAPTIVE (Production)**  | 0.6197            | 0.3810         | 0.7909       | 0.5357           | **0.1634**                    | 97.3%          | 3.0 ms       |
+| **DENSE**                  | 0.6145            | 0.3648         | 0.9364       | 0.5024           | 0.1708                        | 91.8%          | 1304.8 ms    |
+| **BM25**                   | 0.6489            | 0.3914         | 1.0000       | 0.4841           | 0.1374                        | 73.6%          | 4.2 ms       |
+| **HYBRID (0.82/0.18 RRF)** | 0.6048            | 0.3496         | 0.7364       | 0.5018           | 0.1667                        | 91.8%          | 9.6 ms       |
+| **HYBRID + RERANK**        | **0.6481**        | **0.4003**     | **0.9864**   | **0.5015**       | 0.1693                        | **91.8%**     | 111.4 ms     |
+| **ADAPTIVE (Production)**  | 0.5944            | 0.3385         | 0.7182       | 0.5003           | 0.1674                        | 90.0%          | **6.6 ms**   |
 
-> Token-F1 Answer Correctness is reported for completeness but is sensitive to response length. When an LLM judge is used, semantic correctness on answerable queries typically falls in the 0.95–0.99 range (see RAGAS notes below).
+> Token-F1 Answer Correctness is reported for completeness but is sensitive to response length. When an LLM judge is used, semantic correctness on answerable queries typically falls in the 0.95–0.99 range (see RAGAS notes below). Full detailed report available in [RAGAS_EVALUATION_REPORT.md](RAGAS_EVALUATION_REPORT.md).
 
 ### 5. RAGAS LLM-Judge Notes
 
