@@ -145,3 +145,72 @@ def test_grounded_generator_metadata_and_offline():
     assert out["metadata"]["latency_ms"] >= 0.0
     assert len(out["sources"]) == 1
     assert out["validation"]["is_valid"] is True
+
+
+def test_qdrant_hnsw_indexing_configuration():
+    indexer = QdrantIndexer(
+        collection_name="test_hnsw_cfg",
+        vector_size=128,
+        hnsw_m=32,
+        hnsw_ef_construct=128,
+        hnsw_full_scan_threshold=5000,
+    )
+    hnsw_cfg = indexer.get_hnsw_config()
+    assert hnsw_cfg["m"] == 32
+    assert hnsw_cfg["ef_construct"] == 128
+    assert hnsw_cfg["full_scan_threshold"] == 5000
+
+
+def test_qdrant_hnsw_dynamic_update():
+    indexer = QdrantIndexer(
+        collection_name="test_hnsw_update",
+        vector_size=128,
+        hnsw_m=16,
+        hnsw_ef_construct=100,
+    )
+    success = indexer.update_hnsw_config(m=64, ef_construct=256)
+    assert success is True
+    assert indexer.hnsw_m == 64
+    assert indexer.hnsw_ef_construct == 256
+    hnsw_cfg = indexer.get_hnsw_config()
+    assert hnsw_cfg["m"] == 64
+    assert hnsw_cfg["ef_construct"] == 256
+
+
+def test_qdrant_hnsw_search_with_ef():
+    indexer = QdrantIndexer(
+        collection_name="test_hnsw_search",
+        vector_size=4,
+        hnsw_m=16,
+        hnsw_ef_construct=100,
+        hnsw_ef_search=64,
+    )
+    chunk = Chunk(
+        chunk_id="chunk_hnsw_1",
+        document_id="doc_hnsw",
+        text="HNSW graph traversal enables logarithmic approximate nearest neighbor search.",
+    )
+    vec = [1.0, 0.0, 0.0, 0.0]
+    indexer.upsert_chunks([chunk], [vec])
+
+    # Search using default hnsw_ef_search
+    results = indexer.search(vec, top_k=1)
+    assert len(results) == 1
+    assert results[0].chunk_id == "chunk_hnsw_1"
+
+    # Search with query-time explicit hnsw_ef override
+    results_override = indexer.search(vec, top_k=1, hnsw_ef=128)
+    assert len(results_override) == 1
+    assert results_override[0].chunk_id == "chunk_hnsw_1"
+
+
+def test_app_config_hnsw_validation():
+    from config.models import AppConfig
+
+    valid_cfg = AppConfig(hnsw_m=16, hnsw_ef_construct=100, hnsw_full_scan_threshold=10000, hnsw_ef_search=64)
+    warnings = [w for w in valid_cfg.validate() if "HNSW" in w]
+    assert len(warnings) == 0
+
+    invalid_cfg = AppConfig(hnsw_m=0, hnsw_ef_construct=-10, hnsw_full_scan_threshold=-1, hnsw_ef_search=0)
+    invalid_warnings = [w for w in invalid_cfg.validate() if "HNSW" in w]
+    assert len(invalid_warnings) == 4

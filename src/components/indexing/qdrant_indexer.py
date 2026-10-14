@@ -57,11 +57,21 @@ class QdrantIndexer:
         distance: str = "Dot",
         client: Optional[QdrantClient] = None,
         create_indexes: bool = True,
+        hnsw_m: int = 16,
+        hnsw_ef_construct: int = 100,
+        hnsw_full_scan_threshold: int = 10000,
+        hnsw_on_disk: Optional[bool] = None,
+        hnsw_ef_search: Optional[int] = None,
     ) -> None:
         self.collection_name = collection_name
         self.vector_size = vector_size
         self.distance_name = distance
         self.create_indexes = create_indexes
+        self.hnsw_m = hnsw_m
+        self.hnsw_ef_construct = hnsw_ef_construct
+        self.hnsw_full_scan_threshold = hnsw_full_scan_threshold
+        self.hnsw_on_disk = hnsw_on_disk
+        self.hnsw_ef_search = hnsw_ef_search
 
         if client is not None:
             self.client = client
@@ -82,6 +92,87 @@ class QdrantIndexer:
         elif dist == "euclid":
             return qmodels.Distance.EUCLID
         return qmodels.Distance.DOT
+
+    def _get_hnsw_config(self) -> qmodels.HnswConfigDiff:
+        """Construct HnswConfigDiff with configured parameters."""
+        return qmodels.HnswConfigDiff(
+            m=self.hnsw_m,
+            ef_construct=self.hnsw_ef_construct,
+            full_scan_threshold=self.hnsw_full_scan_threshold,
+            on_disk=self.hnsw_on_disk,
+        )
+
+    def get_hnsw_config(self) -> Dict[str, Any]:
+        """Retrieve active HNSW indexing configuration for the collection."""
+        try:
+            coll_info = self.client.get_collection(self.collection_name)
+            v_cfg = getattr(coll_info.config.params, "vectors", None)
+            v_hnsw = getattr(v_cfg, "hnsw_config", None) if isinstance(v_cfg, qmodels.VectorParams) else None
+            c_hnsw = getattr(coll_info.config, "hnsw_config", None)
+
+            cfg = v_hnsw or c_hnsw
+            if cfg is not None:
+                return {
+                    "m": getattr(cfg, "m", self.hnsw_m),
+                    "ef_construct": getattr(cfg, "ef_construct", self.hnsw_ef_construct),
+                    "full_scan_threshold": getattr(cfg, "full_scan_threshold", self.hnsw_full_scan_threshold),
+                    "on_disk": getattr(cfg, "on_disk", self.hnsw_on_disk),
+                }
+        except Exception as exc:
+            logger.debug(f"Failed to fetch HNSW config from collection info: {exc}")
+
+        return {
+            "m": self.hnsw_m,
+            "ef_construct": self.hnsw_ef_construct,
+            "full_scan_threshold": self.hnsw_full_scan_threshold,
+            "on_disk": self.hnsw_on_disk,
+        }
+
+    def update_hnsw_config(
+        self,
+        m: Optional[int] = None,
+        ef_construct: Optional[int] = None,
+        full_scan_threshold: Optional[int] = None,
+        on_disk: Optional[bool] = None,
+    ) -> bool:
+        """Dynamically update HNSW graph parameters on an existing collection."""
+        if m is not None:
+            self.hnsw_m = m
+        if ef_construct is not None:
+            self.hnsw_ef_construct = ef_construct
+        if full_scan_threshold is not None:
+            self.hnsw_full_scan_threshold = full_scan_threshold
+        if on_disk is not None:
+            self.hnsw_on_disk = on_disk
+
+        try:
+            diff = qmodels.HnswConfigDiff(
+                m=self.hnsw_m,
+                ef_construct=self.hnsw_ef_construct,
+                full_scan_threshold=self.hnsw_full_scan_threshold,
+                on_disk=self.hnsw_on_disk,
+            )
+            self.client.update_collection(
+                collection_name=self.collection_name,
+                hnsw_config=diff,
+            )
+            try:
+                coll_info = self.client.get_collection(self.collection_name)
+                v_cfg = getattr(coll_info.config.params, "vectors", None)
+                if isinstance(v_cfg, qmodels.VectorParams):
+                    v_cfg.hnsw_config = diff
+                if hasattr(coll_info.config, "hnsw_config"):
+                    coll_info.config.hnsw_config = diff
+            except Exception:
+                pass
+            logger.info(
+                f"Updated HNSW config on collection '{self.collection_name}': "
+                f"m={self.hnsw_m}, ef_construct={self.hnsw_ef_construct}"
+            )
+            return True
+        except Exception as exc:
+            logger.error(f"Failed to update HNSW config on '{self.collection_name}': {exc}")
+            return False
 
     def create_payload_indexes(
         self, indexes: Optional[Dict[str, qmodels.PayloadSchemaType]] = None
@@ -124,15 +215,19 @@ class QdrantIndexer:
             collections = self.client.get_collections().collections
             exists = any(c.name == self.collection_name for c in collections)
             if not exists:
+                hnsw_diff = self._get_hnsw_config()
                 self.client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=qmodels.VectorParams(
                         size=self.vector_size,
                         distance=self._get_distance(),
+                        hnsw_config=hnsw_diff,
                     ),
+                    hnsw_config=hnsw_diff,
                 )
                 logger.info(
-                    f"Created Qdrant collection: {self.collection_name} (size: {self.vector_size})"
+                    f"Created Qdrant collection: {self.collection_name} "
+                    f"(size: {self.vector_size}, HNSW: m={self.hnsw_m}, ef_construct={self.hnsw_ef_construct})"
                 )
             else:
                 # Validate existing collection vector dimension
@@ -242,10 +337,12 @@ class QdrantIndexer:
         document_ids: Optional[Sequence[str]] = None,
         filter_criteria: Optional[Dict[str, Any]] = None,
         metadata_filter: Optional[Any] = None,
+        hnsw_ef: Optional[int] = None,
     ) -> List[SearchResult]:
         """
         Search vector index with native metadata payload filter and optional document scoping.
         Accepts canonical RetrievalFilter, dictionary filter criteria, or explicit document IDs.
+        Supports query-time HNSW search depth configuration (hnsw_ef).
         """
         must_conditions: List[qmodels.Condition] = []
         must_not_conditions: List[qmodels.Condition] = []
@@ -307,21 +404,33 @@ class QdrantIndexer:
                 kwargs["must_not"] = must_not_conditions
             q_filter = qmodels.Filter(**kwargs)
 
+        # Configure HNSW search parameters if specified or configured
+        effective_ef = hnsw_ef if hnsw_ef is not None else self.hnsw_ef_search
+        search_params = None
+        if effective_ef is not None:
+            search_params = qmodels.SearchParams(hnsw_ef=effective_ef)
+
         if hasattr(self.client, "query_points"):
-            response = self.client.query_points(
-                collection_name=self.collection_name,
-                query=query_vector,
-                query_filter=q_filter,
-                limit=top_k,
-            )
+            qp_kwargs: Dict[str, Any] = {
+                "collection_name": self.collection_name,
+                "query": query_vector,
+                "query_filter": q_filter,
+                "limit": top_k,
+            }
+            if search_params is not None:
+                qp_kwargs["search_params"] = search_params
+            response = self.client.query_points(**qp_kwargs)
             results = response.points
         elif hasattr(self.client, "search"):
-            results = self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_vector,
-                query_filter=q_filter,
-                limit=top_k,
-            )
+            s_kwargs: Dict[str, Any] = {
+                "collection_name": self.collection_name,
+                "query_vector": query_vector,
+                "query_filter": q_filter,
+                "limit": top_k,
+            }
+            if search_params is not None:
+                s_kwargs["search_params"] = search_params
+            results = self.client.search(**s_kwargs)
         else:
             results = []
 

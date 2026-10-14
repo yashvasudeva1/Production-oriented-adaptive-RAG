@@ -87,6 +87,12 @@ class SystemRegistry:
                         collection_name=cfg.qdrant_collection,
                         url=cfg.qdrant_url if cfg.qdrant_url else None,
                         vector_size=embedder.dimension,
+                        distance=cfg.qdrant_distance,
+                        hnsw_m=cfg.hnsw_m,
+                        hnsw_ef_construct=cfg.hnsw_ef_construct,
+                        hnsw_full_scan_threshold=cfg.hnsw_full_scan_threshold,
+                        hnsw_on_disk=cfg.hnsw_on_disk,
+                        hnsw_ef_search=cfg.hnsw_ef_search,
                     )
         return cls._qdrant
 

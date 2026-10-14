@@ -94,6 +94,15 @@ class AppConfig:
     openrouter_api_key: str = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
     api_host: str = field(default_factory=lambda: os.getenv("API_HOST", "127.0.0.1"))
     api_port: int = field(default_factory=lambda: int(os.getenv("API_PORT", "8000")))
+    hnsw_m: int = field(default_factory=lambda: int(os.getenv("HNSW_M", "16")))
+    hnsw_ef_construct: int = field(default_factory=lambda: int(os.getenv("HNSW_EF_CONSTRUCT", "100")))
+    hnsw_full_scan_threshold: int = field(default_factory=lambda: int(os.getenv("HNSW_FULL_SCAN_THRESHOLD", "10000")))
+    hnsw_on_disk: bool = field(
+        default_factory=lambda: os.getenv("HNSW_ON_DISK", "false").lower() in ("true", "1", "yes")
+    )
+    hnsw_ef_search: Optional[int] = field(
+        default_factory=lambda: int(os.getenv("HNSW_EF_SEARCH", "64")) if os.getenv("HNSW_EF_SEARCH") else None
+    )
 
     def validate(self) -> List[str]:
         """Validate configuration settings and return list of warnings/errors."""
@@ -106,6 +115,14 @@ class AppConfig:
             warnings.append("LLM_PROVIDER is set to openrouter but OPENROUTER_API_KEY is not configured.")
         if self.top_k <= 0:
             warnings.append(f"Invalid TOP_K: {self.top_k}. Must be > 0.")
+        if self.hnsw_m <= 0:
+            warnings.append(f"Invalid HNSW_M: {self.hnsw_m}. Must be > 0.")
+        if self.hnsw_ef_construct <= 0:
+            warnings.append(f"Invalid HNSW_EF_CONSTRUCT: {self.hnsw_ef_construct}. Must be > 0.")
+        if self.hnsw_full_scan_threshold < 0:
+            warnings.append(f"Invalid HNSW_FULL_SCAN_THRESHOLD: {self.hnsw_full_scan_threshold}. Must be >= 0.")
+        if self.hnsw_ef_search is not None and self.hnsw_ef_search <= 0:
+            warnings.append(f"Invalid HNSW_EF_SEARCH: {self.hnsw_ef_search}. Must be > 0.")
         return warnings
 
 
