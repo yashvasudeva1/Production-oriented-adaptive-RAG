@@ -230,10 +230,10 @@ class QueryPlanner:
             req_multi_query = (mode == "deep")
             req_decomposition = len(sub_queries) > 1
             req_rerank = True
-            top_k = 20
-            top_k_dense = 20
-            top_k_keyword = 18
-            rerank_top_k = 10
+            top_k = 25
+            top_k_dense = 25
+            top_k_keyword = 20
+            rerank_top_k = 15
             context_budget = 4000
         else:
             # Balanced mode: parallel BM25 + dense, RRF fusion, conditional rerank

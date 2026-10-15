@@ -81,6 +81,10 @@ class SystemRegistry:
         return cls._reranker
 
     @classmethod
+    def get_tier_spec(cls):
+        return cls.get_config().get_tier_spec()
+
+    @classmethod
     def get_doc_store(cls) -> DocumentStore:
         if cls._doc_store is None:
             with cls._lock:

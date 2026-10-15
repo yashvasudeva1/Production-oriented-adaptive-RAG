@@ -75,8 +75,14 @@ def extract_query_signals(query: str, normalized_query: str) -> QuerySignals:
     words = q_lower.split()
     word_count = len(words)
 
-    # 1. Quoted literal phrases
-    quoted = re.findall(r'["\']([^"\']+)["\']', q_raw)
+    # 1. Quoted literal phrases (distinguish true quotes from English possessives/contractions)
+    d_quotes = re.findall(r'"([^"\r\n]+)"', q_raw)
+    s_quotes = re.findall(r"(?:^|[\s(])'([^'\r\n]+)'(?:$|[\s).,!?;:])", q_raw)
+    quoted = [
+        item.strip()
+        for item in (d_quotes + s_quotes)
+        if len(item.strip()) > 1 and len(item.split()) <= 12
+    ]
 
     # 2. Exact identifiers & parameters
     exact_ids: List[str] = []

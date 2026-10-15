@@ -266,11 +266,11 @@ Pre-filtering yields up to ~3.9× higher throughput on selective queries compare
 
 | Configuration              | Context Precision | Context Recall | Faithfulness | Answer Relevancy | Answer Correctness (Token F1) | Abstention Acc | Mean Latency |
 |----------------------------|-------------------|----------------|--------------|------------------|-------------------------------|----------------|--------------|
-| **DENSE**                  | 0.6145            | 0.3648         | 0.9364       | 0.5024           | 0.1708                        | 91.8%          | 1304.8 ms    |
-| **BM25**                   | 0.6489            | 0.3914         | 1.0000       | 0.4841           | 0.1374                        | 73.6%          | 4.2 ms       |
-| **HYBRID (0.82/0.18 RRF)** | 0.6048            | 0.3496         | 0.7364       | 0.5018           | 0.1667                        | 91.8%          | 9.6 ms       |
-| **HYBRID + RERANK**        | **0.6481**        | **0.4003**     | **0.9864**   | **0.5015**       | 0.1693                        | **91.8%**     | 111.4 ms     |
-| **ADAPTIVE (Production)**  | 0.5944            | 0.3385         | 0.7182       | 0.5003           | 0.1674                        | 90.0%          | **6.6 ms**   |
+| **DENSE**                  | 0.6389            | 0.3769         | 0.9576       | 0.5024           | 0.1708                        | 91.8%          | 1991.7 ms    |
+| **BM25**                   | **0.6489**        | 0.3914         | **1.0000**   | 0.4841           | 0.1374                        | 73.6%          | **4.0 ms**   |
+| **HYBRID (0.82/0.18 RRF)** | 0.6070            | 0.3507         | 0.7364       | 0.4980           | 0.1674                        | 91.8%          | 9.1 ms       |
+| **HYBRID + RERANK**        | 0.6481            | **0.4003**     | 0.9864       | **0.5015**       | 0.1693                        | **91.8%**     | 97.7 ms      |
+| **ADAPTIVE (Production)**  | 0.5950            | 0.3381         | 0.7182       | 0.4980           | 0.1675                        | 90.0%          | 6.2 ms       |
 
 > Token-F1 Answer Correctness is reported for completeness but is sensitive to response length. When an LLM judge is used, semantic correctness on answerable queries typically falls in the 0.95–0.99 range (see RAGAS notes below). Full detailed report available in [RAGAS_EVALUATION_REPORT.md](RAGAS_EVALUATION_REPORT.md).
 
@@ -280,7 +280,21 @@ Pre-filtering yields up to ~3.9× higher throughput on selective queries compare
 - Example: `exact_01` → LLM-judge Correctness 0.9551 / Faithfulness 1.0000 (token-F1 0.6667).
 - Rate-limit mitigation for Groq free tier: `max_tokens=850`, `max_workers=1`.
 
-### 6. Operating Modes
+### 6. Free & Open-Weights Production Model Architecture
+
+The platform supports a 3-tier open-weights model hierarchy with strict Apache 2.0 / MIT license compliance and dynamic fallback:
+
+| Tier | Path / Route | Embedding Model | Cross-Encoder Reranker | Primary Generator / LLM |
+| :--- | :--- | :--- | :--- | :--- |
+| **Level 1** | **Fast / High-Confidence** | `Qwen/Qwen3-Embedding-0.6B` or `google/embeddinggemma-2` | None or `cross-encoder/ms-marco-MiniLM-L-6-v2` | `groq/qwen3.8-27b` / `offline` |
+| **Level 2** | **Balanced / Production Default** | `Qwen/Qwen3-Embedding-0.6B` or `BAAI/bge-m3` | `Qwen/Qwen3-Reranker-0.6B` or `BAAI/bge-reranker-v2-m3` | `nvidia/nemotron-3-super-120b-a12b:free` |
+| **Level 3** | **Deep / High-Quality** | `Qwen/Qwen3-Embedding-4B` or `Qwen3-Embedding-8B` | `Qwen/Qwen3-Reranker-4B` or `Qwen3-Reranker-8B` | `nvidia/nemotron-3-super-120b-a12b:free` |
+
+- **Hybrid Backbone**: Always anchored by BM25 + Weighted RRF (`0.82` BM25 / `0.18` Dense).
+- **Multi-Tier Provider Router**: Transparent failover: `Primary` $\rightarrow$ `Fallback` $\rightarrow$ `OpenRouter` $\rightarrow$ `OpenCode` $\rightarrow$ `Offline Extractive`.
+- **OpenCode & OpenRouter Integration**: Native support for `@opencode/cli` background service discovery and OpenRouter open-weights endpoints.
+
+### 7. Operating Modes
 
 - **`mode="fast"`** — Pure BM25 + native pre-filtering. Lowest latency, strongest on keyword-heavy queries.
 - **`mode="adaptive"`** (default) — Confidence-gated hybrid retrieval. Bypasses the cross-encoder when confidence ≥ 0.85.

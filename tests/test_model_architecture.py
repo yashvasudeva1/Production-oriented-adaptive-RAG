@@ -296,3 +296,104 @@ def test_app_config_embedding_dimension_validation():
     assert len(warnings) == 1
     assert "Invalid EMBEDDING_DIMENSION" in warnings[0]
 
+
+def test_qwen3_prompt_prefixing():
+    qwen_embedder = SentenceTransformerEmbedder(model_name="Qwen/Qwen3-Embedding-0.6B")
+    q_qwen = qwen_embedder.format_text("What is quantum computing?", is_query=True)
+    assert q_qwen.startswith("Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ")
+    assert q_qwen.endswith("What is quantum computing?")
+    doc_qwen = qwen_embedder.format_text("Quantum computing uses qubits.", is_query=False)
+    assert not doc_qwen.startswith("Instruct:")
+    assert doc_qwen == "Quantum computing uses qubits."
+
+
+def test_cross_encoder_reranker_none_bypass():
+    from src.components.reranker import CrossEncoderReranker
+    from src.components.retrieval.fusion import UnifiedCandidate
+
+    reranker_none = CrossEncoderReranker(model_name="none")
+    assert reranker_none.enabled is False
+    assert reranker_none._model is False
+    assert reranker_none.should_rerank(execution_mode="balanced", candidates=[1, 2]) is False
+
+    cands = [
+        UnifiedCandidate(chunk_id="c1", text="Text 1", score=0.9, dense_score=0.95),
+        UnifiedCandidate(chunk_id="c2", text="Text 2", score=0.4, dense_score=0.3),
+    ]
+    results = reranker_none.rerank("query text", cands, top_k=2)
+    assert len(results) == 2
+    assert results[0].chunk_id == "c1"
+    assert results[0].rerank_score == 0.95
+
+
+def test_model_tier_specifications():
+    from src.components.orchestration.model_tiers import (
+        MODEL_TIERS,
+        get_tier_spec,
+        resolve_tier_name,
+        list_all_tiers,
+    )
+
+    # Verify all 3 tiers exist
+    tiers = list_all_tiers()
+    assert len(tiers) == 3
+
+    # Fast tier (Level 1)
+    fast = get_tier_spec("fast")
+    assert fast.level == 1
+    assert "Qwen/Qwen3-Embedding-0.6B" in fast.embedding_models
+    assert "google/embeddinggemma-300m" in fast.embedding_models
+    assert "none" in fast.reranker_models
+    assert fast.default_reranker == "none"
+    assert fast.bm25_enabled is True
+    assert fast.rrf_enabled is True
+    assert fast.rrf_bm25_weight == 0.82
+    assert fast.rrf_dense_weight == 0.18
+
+    # Balanced tier (Level 2)
+    balanced = get_tier_spec("balanced")
+    assert balanced.level == 2
+    assert "Qwen/Qwen3-Embedding-0.6B" in balanced.embedding_models
+    assert "BAAI/bge-m3" in balanced.embedding_models
+    assert "Qwen/Qwen3-Reranker-0.6B" in balanced.reranker_models
+    assert balanced.default_reranker == "Qwen/Qwen3-Reranker-0.6B"
+
+    # Deep tier (Level 3)
+    deep = get_tier_spec("deep")
+    assert deep.level == 3
+    assert "Qwen/Qwen3-Embedding-4B" in deep.embedding_models
+    assert "Qwen/Qwen3-Embedding-8B" in deep.embedding_models
+    assert "Qwen/Qwen3-Reranker-4B" in deep.reranker_models
+    assert deep.default_reranker == "Qwen/Qwen3-Reranker-4B"
+
+    # Aliases
+    assert resolve_tier_name("1") == "fast"
+    assert resolve_tier_name("2") == "balanced"
+    assert resolve_tier_name("3") == "deep"
+    assert resolve_tier_name("production") == "balanced"
+
+
+def test_app_config_tier_integration(monkeypatch):
+    from config.models import AppConfig
+
+    monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
+    monkeypatch.delenv("RERANKER_MODEL", raising=False)
+
+    cfg_fast = AppConfig(rag_tier="fast")
+    assert cfg_fast.embedding_model == "Qwen/Qwen3-Embedding-0.6B"
+    assert cfg_fast.reranker_model == "none"
+
+    cfg_balanced = AppConfig(rag_tier="balanced")
+    assert cfg_balanced.embedding_model == "Qwen/Qwen3-Embedding-0.6B"
+    assert cfg_balanced.reranker_model == "Qwen/Qwen3-Reranker-0.6B"
+
+    cfg_deep = AppConfig(rag_tier="deep")
+    assert cfg_deep.embedding_model == "Qwen/Qwen3-Embedding-4B"
+    assert cfg_deep.reranker_model == "Qwen/Qwen3-Reranker-4B"
+
+    # Validation check
+    cfg_invalid = AppConfig(rag_tier="unknown_tier")
+    warnings = cfg_invalid.validate()
+    assert any("Invalid RAG_TIER" in w for w in warnings)
+
+

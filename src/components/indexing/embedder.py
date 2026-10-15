@@ -87,6 +87,14 @@ TASK_PREFIXES: Dict[str, Dict[str, str]] = {
         "query": "query: ",
         "document": "passage: ",
     },
+    "qwen3": {
+        "query": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+        "document": "",
+    },
+    "qwen": {
+        "query": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+        "document": "",
+    },
     "embeddinggemma": {
         "query": "task: search result | query: ",
         "document": "title: none | text: ",
@@ -133,20 +141,26 @@ class SentenceTransformerEmbedder(BaseEmbedder):
 
     def _load_model(self):
         if self._model is None:
+            allow_mock = (
+                os.getenv("ALLOW_MOCK_EMBEDDER", "0").lower() in ("1", "true", "yes")
+                or os.getenv("OFFLINE_EVAL", "0").lower() in ("1", "true", "yes")
+            )
             try:
                 from sentence_transformers import SentenceTransformer
                 try:
                     self._model = SentenceTransformer(
                         self.model_name, device=self.device, local_files_only=True
                     )
-                except Exception:
+                except Exception as local_exc:
+                    if allow_mock:
+                        raise local_exc
                     self._model = SentenceTransformer(
                         self.model_name, device=self.device
                     )
-                if hasattr(self._model, "get_sentence_embedding_dimension"):
-                    self._dimension = self._model.get_sentence_embedding_dimension()
-                elif hasattr(self._model, "get_embedding_dimension"):
+                if hasattr(self._model, "get_embedding_dimension"):
                     self._dimension = self._model.get_embedding_dimension()
+                elif hasattr(self._model, "get_sentence_embedding_dimension"):
+                    self._dimension = self._model.get_sentence_embedding_dimension()
                 else:
                     probe = self._model.encode(["probe"], show_progress_bar=False)
                     self._dimension = len(probe[0])

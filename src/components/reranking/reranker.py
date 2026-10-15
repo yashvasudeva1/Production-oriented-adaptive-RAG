@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from typing import Any, Dict, List, Optional, Sequence
 from pydantic import BaseModel, Field
 
@@ -49,20 +50,46 @@ class CrossEncoderReranker:
         device: str = "cpu",
         default_top_k: int = 5,
         confidence_threshold: float = 0.85,
+        fast_cpu: bool = True,
     ) -> None:
-        self.model_name = model_name
         self.device = device
         self.default_top_k = default_top_k
         self.confidence_threshold = confidence_threshold
-        self._model = None
+        self.fast_cpu = fast_cpu
+
+        clean_name = (model_name or "").strip()
+        force_heavy = os.getenv("FORCE_HEAVY_RERANKER", "0").lower() in ("1", "true", "yes")
+
+        # When running on CPU, heavy cross-encoders (0.6B+ params) introduce severe latency (~28s per query).
+        # Auto-switch to cached ms-marco-MiniLM-L-6-v2 (~200ms) for high-throughput CPU execution.
+        if self.device == "cpu" and self.fast_cpu and not force_heavy:
+            if any(h in clean_name.lower() for h in ("qwen", "bge-reranker")):
+                logger.info(
+                    f"CPU execution detected with heavy reranker '{clean_name}'. "
+                    "Auto-switching to 'cross-encoder/ms-marco-MiniLM-L-6-v2' (200ms vs 28s on CPU)."
+                )
+                clean_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+        self.model_name = clean_name
+        self.enabled = (clean_name or "").strip().lower() not in ("none", "", "disabled", "false", "0")
+        self._model = None if self.enabled else False
 
     def _load_model(self):
+        if not self.enabled:
+            self._model = False
+            return
         if self._model is None:
+            allow_fallback = (
+                os.getenv("ALLOW_MOCK_EMBEDDER", "0").lower() in ("1", "true", "yes")
+                or os.getenv("OFFLINE_EVAL", "0").lower() in ("1", "true", "yes")
+            )
             try:
                 from sentence_transformers import CrossEncoder
                 try:
                     self._model = CrossEncoder(self.model_name, device=self.device, local_files_only=True)
                 except Exception:
+                    if allow_fallback:
+                        raise
                     self._model = CrossEncoder(self.model_name, device=self.device)
                 logger.info(f"Loaded CrossEncoder: {self.model_name}")
             except Exception as exc:
@@ -99,6 +126,8 @@ class CrossEncoderReranker:
         Determines whether reranking adds value or if candidates have high confidence.
         Confidence >= confidence_threshold (e.g. 0.85) bypasses expensive cross-encoder inference.
         """
+        if not self.enabled:
+            return False
         if execution_mode == "fast":
             return False
         if not candidates:
@@ -114,6 +143,11 @@ class CrossEncoderReranker:
             if score is not None and score >= self.confidence_threshold:
                 logger.debug(
                     f"Bypassing reranker: retrieval confidence {score:.2f} >= threshold {self.confidence_threshold:.2f}"
+                )
+                return False
+            if getattr(confidence, "is_sufficient", False) and score is not None and score >= 0.80:
+                logger.debug(
+                    f"Bypassing reranker: candidates marked sufficient with confidence {score:.2f}"
                 )
                 return False
 
@@ -177,6 +211,9 @@ class CrossEncoderReranker:
         k = top_k or self.default_top_k
         if k <= 0:
             return []
+
+        if not self.enabled:
+            return self.bypass_rerank(candidates, top_k)
 
         # Deduplicate incoming candidates from multiple retrieval paths
         unique_cands: Dict[str, Any] = {}

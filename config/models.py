@@ -11,15 +11,18 @@ load_dotenv()
 @dataclass
 class AppConfig:
     """Global configuration settings for Production-oriented Adaptive RAG."""
+    rag_tier: str = field(
+        default_factory=lambda: os.getenv("RAG_TIER", "balanced")
+    )
     model_name: str = field(default_factory=lambda: os.getenv("MODEL_NAME", "Qwen/Qwen3-8B"))
-    embedding_model: str = field(
-        default_factory=lambda: os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+    embedding_model: Optional[str] = field(
+        default_factory=lambda: os.getenv("EMBEDDING_MODEL") or None
     )
     embedding_dimension: Optional[int] = field(
-        default_factory=lambda: int(os.getenv("EMBEDDING_DIMENSION", "768")) if os.getenv("EMBEDDING_DIMENSION") else None
+        default_factory=lambda: int(os.getenv("EMBEDDING_DIMENSION", "1024")) if os.getenv("EMBEDDING_DIMENSION") else None
     )
-    reranker_model: str = field(
-        default_factory=lambda: os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+    reranker_model: Optional[str] = field(
+        default_factory=lambda: os.getenv("RERANKER_MODEL") or None
     )
     qdrant_url: str = field(default_factory=lambda: os.getenv("QDRANT_URL", ""))
     qdrant_collection: str = field(
@@ -107,9 +110,35 @@ class AppConfig:
         default_factory=lambda: int(os.getenv("HNSW_EF_SEARCH", "64")) if os.getenv("HNSW_EF_SEARCH") else None
     )
 
+    def __post_init__(self) -> None:
+        from src.components.orchestration.model_tiers import MODEL_TIERS, resolve_tier_name
+        canonical_tier = resolve_tier_name(self.rag_tier)
+        if canonical_tier in MODEL_TIERS:
+            spec = MODEL_TIERS[canonical_tier]
+            if not self.embedding_model:
+                self.embedding_model = spec.default_embedding
+            if not self.reranker_model:
+                self.reranker_model = spec.default_reranker
+        else:
+            if not self.embedding_model:
+                self.embedding_model = "Qwen/Qwen3-Embedding-0.6B"
+            if not self.reranker_model:
+                self.reranker_model = "Qwen/Qwen3-Reranker-0.6B"
+
+    def get_tier_spec(self):
+        """Retrieve model specification for current active tier."""
+        from src.components.orchestration.model_tiers import get_tier_spec
+        return get_tier_spec(self.rag_tier)
+
     def validate(self) -> List[str]:
         """Validate configuration settings and return list of warnings/errors."""
         warnings: List[str] = []
+        from src.components.orchestration.model_tiers import MODEL_TIERS, resolve_tier_name
+        canonical_tier = resolve_tier_name(self.rag_tier)
+        if canonical_tier not in MODEL_TIERS:
+            warnings.append(
+                f"Invalid RAG_TIER: '{self.rag_tier}'. Must be one of: {list(MODEL_TIERS.keys())} or levels 1, 2, 3."
+            )
         if self.llm_provider in ("groq", "auto") and not self.groq_api_key and not os.getenv("OFFLINE_EVAL"):
             warnings.append("LLM_PROVIDER is set to groq but GROQ_API_KEY is not configured.")
         if self.llm_provider == "gemini" and not self.gemini_api_key and not os.getenv("OFFLINE_EVAL"):

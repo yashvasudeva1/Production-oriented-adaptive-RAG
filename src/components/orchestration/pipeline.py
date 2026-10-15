@@ -225,7 +225,11 @@ class RAGOrchestrator:
         )
         latencies["planning_ms"] = (time.perf_counter() - t_plan) * 1000
 
-        c_doc_ids = plan.candidate_document_ids or document_ids
+        c_doc_ids = (
+            (plan.candidate_document_ids or document_ids)
+            if getattr(self.config, "metadata_filter_enabled", True)
+            else document_ids
+        )
         active_mode = plan.execution_mode
         cascade_stages: List[str] = []
         escalation_reason: Optional[str] = None
@@ -253,7 +257,7 @@ class RAGOrchestrator:
         # STAGE 1: FAST ROUTE (BM25 lexical matching in < 1ms)
         # -----------------------------------------------------------------
         conf: Optional[RetrievalConfidence] = None
-        m_filter = plan.retrieval_filter
+        m_filter = plan.retrieval_filter if getattr(self.config, "metadata_filter_enabled", True) else None
 
         if active_mode == "fast":
             cascade_stages.append("fast_bm25")

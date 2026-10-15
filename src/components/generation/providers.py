@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import random
@@ -7,6 +8,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
@@ -83,15 +85,19 @@ class GroqProvider(BaseLLMProvider):
     Default model: llama-3.3-70b-versatile or llama-3.1-8b-instant.
     """
 
+    _last_request_time: float = 0.0
+
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model_name: str = "llama-3.3-70b-versatile",
-        timeout: float = 10.0,
-        max_retries: int = 2,
+        model_name: str = "qwen/qwen3.8-27b",
+        timeout: float = 16.0,
+        max_retries: int = 5,
+        min_request_interval: float = 7.0,
     ) -> None:
         super().__init__(model_name=model_name, timeout=timeout, max_retries=max_retries)
         self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
+        self.min_request_interval = min_request_interval
 
     def generate(
         self,
@@ -101,6 +107,13 @@ class GroqProvider(BaseLLMProvider):
     ) -> LLMResult:
         if not self.api_key:
             raise AuthenticationError("GROQ_API_KEY is not configured.")
+
+        # Enforce rate limit interval for free tier TPM / RPM limits
+        now = time.time()
+        elapsed = now - GroqProvider._last_request_time
+        if elapsed < self.min_request_interval:
+            time.sleep(self.min_request_interval - elapsed)
+        GroqProvider._last_request_time = time.time()
 
         import requests
 
@@ -116,6 +129,7 @@ class GroqProvider(BaseLLMProvider):
                 {"role": "user", "content": prompt},
             ],
             "temperature": temperature,
+            "max_tokens": 1024,
         }
 
         last_err: Optional[Exception] = None
@@ -138,15 +152,25 @@ class GroqProvider(BaseLLMProvider):
                     )
                 elif resp.status_code == 429:
                     retry_header = resp.headers.get("Retry-After")
-                    retry_sec = float(retry_header) if retry_header and retry_header.isdigit() else 2.0
+                    reset_tokens = resp.headers.get("x-ratelimit-reset-tokens")
+                    retry_sec = 3.0
+                    if reset_tokens:
+                        m_sec = re.search(r"([\d\.]+)s", reset_tokens)
+                        if m_sec:
+                            retry_sec = float(m_sec.group(1))
+                    elif retry_header and retry_header.replace(".", "", 1).isdigit():
+                        # Cap at 5.0s because Retry-After often contains the whole day/hour reset
+                        retry_sec = min(float(retry_header), 5.0)
+
                     last_err = RateLimitError(
                         f"Groq rate limit exceeded (HTTP 429). Retry-After: {retry_sec}s",
                         retry_after=retry_sec,
                     )
                     if attempt < self.max_retries:
-                        sleep_time = min(retry_sec, 4.0) + random.uniform(0.1, 0.5)
+                        sleep_time = min(max(retry_sec, 3.0), 6.0) + (attempt * 1.5) + random.uniform(0.2, 0.8)
                         logger.warning(f"Groq 429 rate limit hit. Backing off for {sleep_time:.2f}s...")
                         time.sleep(sleep_time)
+                        GroqProvider._last_request_time = time.time()
                         continue
                     raise last_err
                 elif resp.status_code in (401, 403):
@@ -179,18 +203,22 @@ class GroqProvider(BaseLLMProvider):
 class GeminiProvider(BaseLLMProvider):
     """
     Google Gemini free-tier provider adapter (Generative Language API).
-    Default model: gemini-2.5-flash or gemini-1.5-flash.
+    Default model: gemini-2.5-flash-lite or gemini-flash-lite-latest.
     """
+
+    _last_request_time: float = 0.0
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model_name: str = "gemini-1.5-flash",
-        timeout: float = 10.0,
-        max_retries: int = 2,
+        model_name: str = "gemini-2.5-flash-lite",
+        timeout: float = 14.0,
+        max_retries: int = 3,
+        min_request_interval: float = 4.1,
     ) -> None:
         super().__init__(model_name=model_name, timeout=timeout, max_retries=max_retries)
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
+        self.min_request_interval = min_request_interval
 
     def generate(
         self,
@@ -201,9 +229,17 @@ class GeminiProvider(BaseLLMProvider):
         if not self.api_key:
             raise AuthenticationError("GEMINI_API_KEY is not configured.")
 
+        # Enforce rate limit interval for free tier (15 requests/minute = 1 req per 4.0s)
+        now = time.time()
+        elapsed = now - GeminiProvider._last_request_time
+        if elapsed < self.min_request_interval:
+            time.sleep(self.min_request_interval - elapsed)
+        GeminiProvider._last_request_time = time.time()
+
         import requests
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
+        clean_model = self.model_name.replace("models/", "")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={self.api_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -237,8 +273,10 @@ class GeminiProvider(BaseLLMProvider):
                 elif resp.status_code == 429:
                     last_err = RateLimitError("Gemini free-tier rate limit exceeded (HTTP 429).")
                     if attempt < self.max_retries:
-                        sleep_time = (2 ** attempt) + random.uniform(0.1, 0.5)
+                        sleep_time = 12.0 + (attempt * 6.0) + random.uniform(0.5, 2.0)
+                        logger.warning(f"Gemini 429 rate limit hit. Backing off for {sleep_time:.2f}s...")
                         time.sleep(sleep_time)
+                        GeminiProvider._last_request_time = time.time()
                         continue
                     raise last_err
                 elif resp.status_code in (401, 403):
@@ -270,15 +308,15 @@ class GeminiProvider(BaseLLMProvider):
 class OpenRouterProvider(BaseLLMProvider):
     """
     OpenRouter free models provider adapter.
-    Default model: meta-llama/llama-3.2-3b-instruct:free.
+    Default model: nvidia/nemotron-3-super-120b-a12b:free.
     """
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model_name: str = "meta-llama/llama-3.2-3b-instruct:free",
-        timeout: float = 12.0,
-        max_retries: int = 2,
+        model_name: str = "nvidia/nemotron-3-super-120b-a12b:free",
+        timeout: float = 20.0,
+        max_retries: int = 3,
     ) -> None:
         super().__init__(model_name=model_name, timeout=timeout, max_retries=max_retries)
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY", "")
@@ -356,6 +394,111 @@ class OpenRouterProvider(BaseLLMProvider):
                 raise last_err
 
         raise last_err or LLMProviderError("OpenRouter inference failed.")
+
+
+class OpenCodeProvider(BaseLLMProvider):
+    """
+    OpenCode local server provider adapter (opencode serve/API).
+    Default endpoint: http://127.0.0.1:4096 or discovered from ~/.local/state/opencode/service.json.
+    Default model: opencode/nemotron-3.5-lightning-free.
+    """
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        model_name: str = "opencode/nemotron-3.5-lightning-free",
+        timeout: float = 20.0,
+        max_retries: int = 2,
+    ) -> None:
+        super().__init__(model_name=model_name, timeout=timeout, max_retries=max_retries)
+        self.base_url = base_url or os.getenv("OPENCODE_API_URL", "")
+        self.password = os.getenv("OPENCODE_SERVER_PASSWORD", "")
+
+        # Auto-discover local opencode service if not explicitly specified
+        if not self.base_url:
+            svc_path = Path.home() / ".local" / "state" / "opencode" / "service.json"
+            if svc_path.exists():
+                try:
+                    with open(svc_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        self.base_url = data.get("url", "http://127.0.0.1:4096")
+                        if not self.password:
+                            self.password = data.get("password", "")
+                except Exception:
+                    pass
+        if not self.base_url:
+            self.base_url = "http://127.0.0.1:4096"
+
+    def generate(
+        self,
+        prompt: str,
+        system_prompt: str,
+        temperature: float = 0.0,
+    ) -> LLMResult:
+        import requests
+
+        url = f"{self.base_url.rstrip('/')}/api/experimental/generate"
+        auth = ("opencode", self.password) if self.password else None
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "opencode/2.0.18",
+        }
+
+        clean_model = self.model_name.replace("opencode/", "")
+        payload = {
+            "prompt": f"{system_prompt}\n\n{prompt}",
+            "model": {
+                "providerID": "opencode",
+                "id": clean_model,
+            },
+        }
+
+        t0 = time.perf_counter()
+        last_err: Optional[Exception] = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, auth=auth, timeout=self.timeout)
+                if resp.status_code == 200:
+                    latency = (time.perf_counter() - t0) * 1000
+                    data = resp.json()
+                    choice = data.get("data", {}).get("text", "").strip()
+                    return LLMResult(
+                        text=choice,
+                        provider="opencode",
+                        model=self.model_name,
+                        latency_ms=latency,
+                        tokens_used=len(choice.split()),
+                    )
+                elif resp.status_code == 429:
+                    last_err = RateLimitError("OpenCode rate limit exceeded (HTTP 429).")
+                    if attempt < self.max_retries:
+                        time.sleep(2.0)
+                        continue
+                    raise last_err
+                elif resp.status_code in (401, 403):
+                    raise AuthenticationError(f"OpenCode server authorization rejected (HTTP {resp.status_code}).")
+                else:
+                    msg = f"OpenCode HTTP {resp.status_code}: {sanitize_secret(resp.text[:200])}"
+                    last_err = LLMProviderError(msg)
+                    if attempt < self.max_retries and resp.status_code >= 500 and resp.status_code != 503:
+                        time.sleep(1.0)
+                        continue
+                    raise last_err
+            except requests.Timeout:
+                last_err = ProviderTimeoutError(f"OpenCode request timed out after {self.timeout}s.")
+                if attempt < self.max_retries:
+                    time.sleep(1.0)
+                    continue
+                raise last_err
+            except requests.RequestException as re_exc:
+                last_err = LLMProviderError(f"OpenCode connection error: {sanitize_secret(str(re_exc))}")
+                if attempt < self.max_retries:
+                    time.sleep(1.0)
+                    continue
+                raise last_err
+
+        raise last_err or LLMProviderError("OpenCode inference failed.")
 
 
 class OfflineExtractiveProvider(BaseLLMProvider):
@@ -462,8 +605,8 @@ class ProviderRouter:
         primary_model: str = "llama-3.3-70b-versatile",
         fallback_provider: str = "offline",
         fallback_model: str = "",
-        timeout: float = 10.0,
-        max_retries: int = 2,
+        timeout: float = 16.0,
+        max_retries: int = 5,
     ) -> None:
         self.primary_name = primary_provider.lower()
         self.primary_model = primary_model
@@ -479,17 +622,22 @@ class ProviderRouter:
         # Register available provider adapters
         self._providers["offline"] = OfflineExtractiveProvider()
         self._providers["groq"] = GroqProvider(
-            model_name=self.primary_model if self.primary_name == "groq" else "llama-3.3-70b-versatile",
+            model_name=self.primary_model if self.primary_name == "groq" else (self.fallback_model if self.fallback_model and "qwen" not in self.fallback_model else "llama-3.3-70b-versatile"),
             timeout=self.timeout,
             max_retries=self.max_retries,
         )
         self._providers["gemini"] = GeminiProvider(
-            model_name=self.primary_model if self.primary_name == "gemini" else "gemini-1.5-flash",
+            model_name=self.primary_model if self.primary_name == "gemini" else "gemini-2.5-flash-lite",
             timeout=self.timeout,
             max_retries=self.max_retries,
         )
         self._providers["openrouter"] = OpenRouterProvider(
-            model_name=self.primary_model if self.primary_name == "openrouter" else "meta-llama/llama-3.2-3b-instruct:free",
+            model_name=self.primary_model if self.primary_name == "openrouter" else (self.fallback_model if self.fallback_name == "openrouter" and self.fallback_model else "nvidia/nemotron-3-super-120b-a12b:free"),
+            timeout=self.timeout,
+            max_retries=self.max_retries,
+        )
+        self._providers["opencode"] = OpenCodeProvider(
+            model_name=self.primary_model if self.primary_name == "opencode" else (self.fallback_model if self.fallback_name == "opencode" and self.fallback_model else "opencode/nemotron-3.5-lightning-free"),
             timeout=self.timeout,
             max_retries=self.max_retries,
         )
@@ -518,16 +666,31 @@ class ProviderRouter:
                 f"failed: {reason}. Failing over to '{self.fallback_name}'."
             )
 
-            fallback = self._providers.get(self.fallback_name) or self._providers["offline"]
-            try:
-                res = fallback.generate(prompt, system_prompt, temperature)
-                res.is_fallback = True
-                return res
-            except Exception as fb_exc:
-                logger.error(
-                    f"[ProviderRouter] Fallback provider '{self.fallback_name}' also failed: {sanitize_secret(str(fb_exc))}. "
-                    "Falling back to local offline extractive synthesis."
-                )
-                res = self._providers["offline"].generate(prompt, system_prompt, temperature)
-                res.is_fallback = True
-                return res
+            fallback = self._providers.get(self.fallback_name)
+            if fallback is not None and fallback != primary:
+                try:
+                    res = fallback.generate(prompt, system_prompt, temperature)
+                    res.is_fallback = True
+                    return res
+                except Exception as fb_exc:
+                    logger.warning(
+                        f"[ProviderRouter] Fallback provider '{self.fallback_name}' failed: {sanitize_secret(str(fb_exc))}."
+                    )
+
+            # If both primary and fallback failed (or fallback was offline), try OpenRouter as secondary online safety net
+            if self.primary_name != "openrouter" and self.fallback_name != "openrouter" and os.getenv("OPENROUTER_API_KEY"):
+                try:
+                    logger.info("[ProviderRouter] Attempting tertiary online failover via OpenRouter...")
+                    or_prov = self._providers.get("openrouter")
+                    if or_prov:
+                        res = or_prov.generate(prompt, system_prompt, temperature)
+                        res.is_fallback = True
+                        return res
+                except Exception as or_exc:
+                    logger.warning(f"[ProviderRouter] OpenRouter tertiary failover failed: {sanitize_secret(str(or_exc))}")
+
+            # Ultimate fallback to offline extractive
+            logger.error("[ProviderRouter] All online providers failed. Falling back to offline extractive synthesis.")
+            res = self._providers["offline"].generate(prompt, system_prompt, temperature)
+            res.is_fallback = True
+            return res

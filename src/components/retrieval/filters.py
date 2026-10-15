@@ -242,6 +242,10 @@ class RetrievalFilter(BaseModel):
                     "organizations", "dates", "document_type", "department", "locations"
                 ):
                     continue
+                # For open-domain chunks where the field does not exist in the document schema,
+                # avoid rejecting all candidates due to missing optional entity tags
+                if raw_field in ("locations", "organizations", "dates"):
+                    continue
                 return False
 
             if not _evaluate_operator(actual_val, cond.operator, cond.value):

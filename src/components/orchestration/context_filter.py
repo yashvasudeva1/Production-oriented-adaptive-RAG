@@ -21,12 +21,14 @@ class ContextFilter:
     def __init__(
         self,
         max_context_tokens: int = 2048,
-        min_rerank_score: float = -8.0,
+        min_rerank_score: float = -10.5,
         similarity_threshold: float = 0.82,
+        max_chunks_per_doc: int = 2,
     ) -> None:
         self.max_context_tokens = max_context_tokens
         self.min_rerank_score = min_rerank_score
         self.similarity_threshold = similarity_threshold
+        self.max_chunks_per_doc = max_chunks_per_doc
 
     def _estimate_tokens(self, text: str) -> int:
         return max(1, len(text.split()))
@@ -78,6 +80,11 @@ class ContextFilter:
             # Skip chunks with heavy lexical or bigram overlap to maintain diversity
             if any(self._is_near_duplicate(cand.text, existing.text) for existing in filtered):
                 logger.debug(f"Filtering near-duplicate chunk {cand.chunk_id}")
+                continue
+
+            # Limit chunks per document to promote multi-document graph traversal
+            doc_id = getattr(cand, "document_id", None)
+            if doc_id and sum(1 for e in filtered if getattr(e, "document_id", None) == doc_id) >= self.max_chunks_per_doc:
                 continue
 
             # Enforce prompt context token budget
