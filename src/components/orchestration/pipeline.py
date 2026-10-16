@@ -669,6 +669,8 @@ class RAGOrchestrator:
         # Early abstention if evidence is insufficient
         if not verdict.allowed:
             total_latency = (time.perf_counter() - start_time) * 1000
+            latencies["generation_ms"] = 0.0
+            latencies["retrieval_ms"] = max(0.0, total_latency - latencies.get("planning_ms", 0.0))
             latencies["total_ms"] = total_latency
             return RAGResponse(
                 query=query,
@@ -694,6 +696,9 @@ class RAGOrchestrator:
         latencies["generation_ms"] = (time.perf_counter() - t_gen) * 1000
 
         total_latency = (time.perf_counter() - start_time) * 1000
+        latencies["retrieval_ms"] = max(
+            0.0, total_latency - latencies.get("planning_ms", 0.0) - latencies["generation_ms"]
+        )
         latencies["total_ms"] = total_latency
 
         return RAGResponse(

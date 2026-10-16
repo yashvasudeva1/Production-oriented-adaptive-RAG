@@ -9,5 +9,6 @@ dependencies = []
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "-ra -q"
+addopts = "-ra -q --junitxml=test-results/junit.xml"
+junit_family = "xunit2"
 

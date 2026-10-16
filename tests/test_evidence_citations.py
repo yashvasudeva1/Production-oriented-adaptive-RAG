@@ -109,3 +109,27 @@ def test_citation_builder_and_validator():
     report_invalid = validator.validate(answer_invalid, sources)
     assert report_invalid.is_valid is False
     assert 99 in report_invalid.hallucinated_citations
+
+
+def test_claim_support_validation_independent_of_citations():
+    """Verify claim support is evaluated accurately with or without bracketed citations."""
+    validator = CitationValidator()
+
+    contexts = [
+        "The Transformer encoder consists of 6 identical layers with multi-head attention.",
+        "Scaled dot-product attention applies a scaling factor of 1 divided by the square root of d_k.",
+    ]
+
+    # Grounded answer with NO citations
+    ans_uncited_grounded = "The encoder has 6 identical layers. It uses scaled dot-product attention."
+    res = validator.validate_claim_support(ans_uncited_grounded, contexts)
+    assert res["is_supported"] is True
+    assert res["factual_support_ratio"] >= 0.80
+    assert len(res["unsupported_claims"]) == 0
+
+    # Hallucinated answer with NO citations
+    ans_uncited_hallucinated = "The encoder was fabricated in 1912 by medieval steam engineers."
+    res_hallucinated = validator.validate_claim_support(ans_uncited_hallucinated, contexts)
+    assert res_hallucinated["is_supported"] is False
+    assert res_hallucinated["factual_support_ratio"] == 0.0
+    assert len(res_hallucinated["unsupported_claims"]) == 1
