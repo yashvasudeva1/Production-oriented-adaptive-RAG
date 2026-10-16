@@ -112,9 +112,131 @@ class CitationValidator:
         "how", "rely", "relies", "use", "uses", "used", "also"
     }
 
+    NEGATION_WORDS = {
+        "not", "no", "never", "none", "neither", "nor", "cannot", "cant",
+        "without", "hardly", "barely", "scarcely", "refuse", "refuses",
+        "fails", "failed", "doesnt", "isnt", "arent", "wasnt", "werent",
+        "havent", "hasnt", "wont", "wouldnt", "dont", "didnt"
+    }
+
+    CONTRADICTION_PAIRS = [
+        ({"unpaid", "honorary", "free", "non-salaried"}, {"paid", "salary", "salaried", "stipend", "remuneration"}),
+        ({"dispensed", "without", "eliminated", "removed", "no"}, {"uses", "using", "required", "employs", "relies", "incorporates"}),
+        ({"maximum", "max"}, {"minimum", "min"}),
+        ({"faster", "speedup", "quick"}, {"slower", "slow", "bottleneck"}),
+        ({"prohibits", "disallows", "forbidden", "ineligible"}, {"allows", "permits", "eligible", "accepted"}),
+        ({"parallel", "parallelizable"}, {"sequential", "recurrent", "autoregressive"}),
+    ]
+
+    ENTITY_EXCLUSIONS = {
+        "The", "This", "That", "These", "Those", "There", "Here", "It", "Its",
+        "We", "They", "Our", "Their", "According", "Based", "In", "On", "At",
+        "For", "With", "By", "As", "If", "When", "While", "Sources", "Source",
+        "Figure", "Table", "Section", "Chapter", "Paper", "Papers", "Model",
+        "Models", "Transformer", "Transformers", "Attention", "System", "Systems",
+        "Method", "Methods", "Data", "Document", "Documents"
+    }
+
     def _extract_content_words(self, text: str) -> List[str]:
         words = re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", text.lower())
         return [w for w in words if w not in self.STOPWORDS]
+
+    def _check_numeric_contradiction(
+        self, claim_text: str, ctx_texts: List[str]
+    ) -> Tuple[bool, Optional[str]]:
+        """Verify that numbers/quantities asserted in the claim exist in the evidence context."""
+        claim_nums = re.findall(r"\b\d+(?:\.\d+)?%?\b", claim_text)
+        if not claim_nums:
+            return False, None
+
+        all_ctx_nums = set(re.findall(r"\b\d+(?:\.\d+)?%?\b", " ".join(ctx_texts)))
+        if not all_ctx_nums:
+            return True, f"Claim asserts numbers {claim_nums} but evidence context contains no numeric data"
+
+        norm_ctx_nums = {n.replace(",", "").replace("%", "") for n in all_ctx_nums}
+        missing_nums = [
+            n for n in claim_nums
+            if n not in all_ctx_nums and n.replace(",", "").replace("%", "") not in norm_ctx_nums
+        ]
+
+        if missing_nums:
+            return True, f"Numeric contradiction: {missing_nums} not present in evidence context"
+        return False, None
+
+    def _check_polarity_inversion(
+        self, claim_text: str, evidence_span: str, all_ctx_text: str
+    ) -> Tuple[bool, Optional[str]]:
+        """Detect negation or antonym contradictions reversing factual polarity."""
+        c_clean = re.sub(r"[^\w\s]", "", claim_text.lower())
+        c_words = set(c_clean.split())
+        ctx_words = set(re.sub(r"[^\w\s]", "", all_ctx_text.lower()).split())
+
+        # 1. Antonym contradiction check
+        for set_a, set_b in self.CONTRADICTION_PAIRS:
+            if (c_words & set_a and ctx_words & set_b) or (c_words & set_b and ctx_words & set_a):
+                return True, "Antonym contradiction between claim and evidence"
+
+        # 2. Negation polarity inversion against matching evidence span
+        if not evidence_span:
+            return False, None
+
+        e_clean = re.sub(r"[^\w\s]", "", evidence_span.lower())
+        e_words = set(e_clean.split())
+
+        c_has_neg = bool(c_words & self.NEGATION_WORDS)
+        e_has_neg = bool(e_words & self.NEGATION_WORDS)
+
+        if c_has_neg != e_has_neg:
+            c_content = self._extract_content_words(claim_text)
+            e_content = self._extract_content_words(evidence_span)
+            if c_content and e_content:
+                overlap = len(set(c_content) & set(e_content)) / len(set(c_content))
+                if overlap >= 0.40:
+                    return True, "Polarity inversion: negation mismatch on evidence statement"
+
+        return False, None
+
+    def _check_entity_swapping(
+        self, claim_text: str, all_ctx_text: str
+    ) -> Tuple[bool, Optional[str]]:
+        """Detect ungrounded or swapped named entities not present in context."""
+        words = claim_text.strip().split()
+        first_word = re.sub(r"[^\w]", "", words[0]) if words else ""
+
+        capitalized = re.findall(r"\b[A-Z][a-zA-Z0-9_\-]+\b", claim_text)
+        candidate_entities = [
+            e for e in capitalized
+            if e not in self.ENTITY_EXCLUSIONS
+            and len(e) > 2
+            and not (e == first_word and e.istitle() and not any(c.isupper() for c in e[1:]))
+        ]
+        if not candidate_entities:
+            return False, None
+
+        ctx_lower = all_ctx_text.lower()
+        missing = [
+            e for e in candidate_entities
+            if e.lower() not in ctx_lower and (len(e) <= 3 or e.lower().rstrip("s") not in ctx_lower)
+        ]
+
+        if missing:
+            return True, f"Entity mismatch: {missing} not grounded in evidence context"
+        return False, None
+
+    def _check_unsupported_predicates(
+        self, claim_text: str, all_ctx_text: str
+    ) -> Tuple[bool, Optional[str]]:
+        """Detect claims that borrow vocabulary from evidence but introduce ungrounded predicates."""
+        c_content = self._extract_content_words(claim_text)
+        if not c_content or len(c_content) < 3:
+            return False, None
+
+        ctx_lower = all_ctx_text.lower()
+        absent_content = [w for w in c_content if w not in ctx_lower]
+
+        if len(absent_content) / len(c_content) >= 0.50:
+            return True, f"Unsupported predicate: key terms {absent_content} ungrounded in context"
+        return False, None
 
     def validate_claim_support(
         self,
@@ -192,16 +314,43 @@ class CitationValidator:
             global_overlap = (len(c_word_set & all_ctx_words) / len(c_word_set)) if c_word_set else 1.0
             effective_overlap = max(best_span_overlap, global_overlap)
 
-            # Classify grounding status
-            if effective_overlap >= 0.35:
-                status = "supported"
-                supported_count += 1
-            elif effective_overlap >= 0.20:
-                status = "partially_supported"
-                unsupported.append(sent_clean)
-            else:
+            # Adversarial and Integrity Checks
+            is_num_conflict, num_err = self._check_numeric_contradiction(sent_clean, ctx_texts)
+            is_neg_conflict, neg_err = self._check_polarity_inversion(sent_clean, best_span, all_ctx_text)
+            is_entity_conflict, ent_err = self._check_entity_swapping(sent_clean, all_ctx_text)
+            is_pred_conflict, pred_err = self._check_unsupported_predicates(sent_clean, all_ctx_text)
+
+            failure_reason = ""
+            if is_num_conflict:
+                status = "contradicted"
+                effective_overlap = 0.0
+                failure_reason = num_err or "numeric contradiction"
+                unsupported.append(f"{sent_clean} [{failure_reason}]")
+            elif is_neg_conflict:
+                status = "contradicted"
+                effective_overlap = 0.0
+                failure_reason = neg_err or "polarity contradiction"
+                unsupported.append(f"{sent_clean} [{failure_reason}]")
+            elif is_entity_conflict:
                 status = "ungrounded"
-                unsupported.append(sent_clean)
+                effective_overlap = min(effective_overlap, 0.15)
+                failure_reason = ent_err or "swapped entity"
+                unsupported.append(f"{sent_clean} [{failure_reason}]")
+            elif is_pred_conflict:
+                status = "ungrounded"
+                effective_overlap = min(effective_overlap, 0.20)
+                failure_reason = pred_err or "unsupported predicate"
+                unsupported.append(f"{sent_clean} [{failure_reason}]")
+            else:
+                if effective_overlap >= 0.35:
+                    status = "supported"
+                    supported_count += 1
+                elif effective_overlap >= 0.20:
+                    status = "partially_supported"
+                    unsupported.append(sent_clean)
+                else:
+                    status = "ungrounded"
+                    unsupported.append(sent_clean)
 
             claim_details.append({
                 "claim_id": idx,
@@ -209,6 +358,7 @@ class CitationValidator:
                 "status": status,
                 "support_score": round(effective_overlap, 3),
                 "evidence_span": best_span[:200],
+                "failure_reason": failure_reason,
             })
 
         ratio = (supported_count / len(sentences)) if sentences else 1.0

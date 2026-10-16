@@ -133,3 +133,61 @@ def test_claim_support_validation_independent_of_citations():
     assert res_hallucinated["is_supported"] is False
     assert res_hallucinated["factual_support_ratio"] == 0.0
     assert len(res_hallucinated["unsupported_claims"]) == 1
+
+
+def test_adversarial_claim_verification_categories():
+    """
+    Adversarial verification suite:
+    1. Negation inversion
+    2. Semantic / antonym contradiction
+    3. Incorrect numbers / quantities
+    4. Swapped / hallucinated entities
+    5. Plausible-sounding claims sharing vocabulary with evidence
+    """
+    validator = CitationValidator()
+
+    evidence_pool = [
+        "The base model employs 8 parallel attention heads and 6 encoder layers.",
+        "The NITI Aayog internship is strictly unpaid and honorary without financial remuneration.",
+        "Ashish Vaswani and Noam Shazeer authored the Attention Is All You Need paper at Google Brain in 2017.",
+        "Self-attention operates across input sequence tokens in parallel without recurrence or convolutions.",
+    ]
+
+    # 1. Negation Inversion: Shares 90% content words with evidence 1, but negates the predicate
+    claim_negation = "The base model does not employ 8 parallel attention heads."
+    res_neg = validator.validate_claim_support(claim_negation, evidence_pool)
+    assert res_neg["is_supported"] is False
+    assert res_neg["factual_support_ratio"] == 0.0
+    assert res_neg["claim_details"][0]["status"] == "contradicted"
+    assert "polarity" in res_neg["claim_details"][0]["failure_reason"].lower() or "negation" in res_neg["claim_details"][0]["failure_reason"].lower()
+
+    # 2. Semantic Contradiction / Antonyms: Uses "paid" and "salary" contradicting "unpaid" and "honorary"
+    claim_contradiction = "The NITI Aayog internship is paid with a high monthly salary."
+    res_contra = validator.validate_claim_support(claim_contradiction, evidence_pool)
+    assert res_contra["is_supported"] is False
+    assert res_contra["factual_support_ratio"] == 0.0
+    assert res_contra["claim_details"][0]["status"] == "contradicted"
+
+    # 3. Incorrect Numbers: Uses 128 and 24 instead of 8 and 6
+    claim_bad_nums = "The base model employs 128 parallel attention heads and 24 encoder layers."
+    res_nums = validator.validate_claim_support(claim_bad_nums, evidence_pool)
+    assert res_nums["is_supported"] is False
+    assert res_nums["factual_support_ratio"] == 0.0
+    assert res_nums["claim_details"][0]["status"] == "contradicted"
+    assert "numeric" in res_nums["claim_details"][0]["failure_reason"].lower()
+
+    # 4. Swapped Entities: Replaces Vaswani & Shazeer with Einstein & Newton
+    claim_swapped_entities = "Albert Einstein and Isaac Newton authored the Attention Is All You Need paper at Google Brain in 2017."
+    res_entities = validator.validate_claim_support(claim_swapped_entities, evidence_pool)
+    assert res_entities["is_supported"] is False
+    assert res_entities["factual_support_ratio"] == 0.0
+    assert res_entities["claim_details"][0]["status"] == "ungrounded"
+    assert "entity" in res_entities["claim_details"][0]["failure_reason"].lower()
+
+    # 5. Plausible-Sounding Claim Sharing Vocabulary: Borrows sequence tokens, self-attention, but introduces LSTM gates
+    claim_false_predicate = "Self-attention operates across input sequence tokens using convolutional recurrent LSTM gates."
+    res_pred = validator.validate_claim_support(claim_false_predicate, evidence_pool)
+    assert res_pred["is_supported"] is False
+    assert res_pred["factual_support_ratio"] == 0.0
+    assert res_pred["claim_details"][0]["status"] in ("contradicted", "ungrounded")
+
