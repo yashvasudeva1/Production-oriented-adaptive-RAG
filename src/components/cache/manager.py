@@ -157,6 +157,13 @@ class CacheManager:
             logger.info(f"Bumped index version to {self.index_version}; cleared retrieval cache.")
             return self.index_version
 
+    def clear(self) -> None:
+        """Clear all in-memory caches."""
+        with self._lock:
+            self.embedding_cache.clear()
+            self.retrieval_cache.clear()
+            self.reranker_cache.clear()
+
     def get_stats(self) -> Dict[str, Any]:
         return {
             "enabled": self.enabled,

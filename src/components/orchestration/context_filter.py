@@ -23,7 +23,7 @@ class ContextFilter:
         max_context_tokens: int = 2048,
         min_rerank_score: float = -10.5,
         similarity_threshold: float = 0.82,
-        max_chunks_per_doc: int = 2,
+        max_chunks_per_doc: int = 5,
     ) -> None:
         self.max_context_tokens = max_context_tokens
         self.min_rerank_score = min_rerank_score

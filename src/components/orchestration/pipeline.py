@@ -20,6 +20,7 @@ from ..retrieval.confidence import RetrievalConfidence, RetrievalConfidenceScore
 from ..retrieval.dense import DenseRetriever
 from ..retrieval.fusion import UnifiedCandidate, fuse_candidates, reciprocal_rank_fusion
 from ..retrieval.hybrid import HybridRetriever
+from ..retrieval.iterative import BoundedIterativeRetriever
 from ..retrieval.keyword import KeywordRetriever
 from ..retrieval.multi_query import MultiQueryRetriever
 from ..retrieval.parent_child import ParentChildRetriever
@@ -47,6 +48,8 @@ class RetrievalMetadata(BaseModel):
     parent_expanded: bool = False
     multi_query_used: bool = False
     decomposed: bool = False
+    iterative_hops: int = 1
+    bridge_queries: List[str] = Field(default_factory=list)
     fast_rank: Optional[int] = None
     balanced_rank: Optional[int] = None
     deep_rank: Optional[int] = None
@@ -127,6 +130,12 @@ class RAGOrchestrator:
         )
         self.multi_query_retriever = MultiQueryRetriever(
             base_retriever=self.dense_retriever
+        )
+        self.iterative_retriever = BoundedIterativeRetriever(
+            dense_retriever=self.dense_retriever,
+            keyword_retriever=self.keyword_retriever,
+            max_hops=2,
+            top_k_per_hop=6,
         )
 
         self.reranker = reranker or SystemRegistry.get_reranker()
@@ -249,6 +258,8 @@ class RAGOrchestrator:
         did_decompose = False
 
         exact_ids = plan.retrieval_signals.get("exact_identifiers", [])
+        iterative_hops = 1
+        bridge_queries_used: List[str] = []
 
         final_context: List[RerankerResult] = []
         verdict: Optional[EvidenceVerdict] = None
@@ -385,18 +396,23 @@ class RAGOrchestrator:
 
             # Conditional reranking: bypass if confidence is high, rerank top candidates if ambiguous
             t_rerank = time.perf_counter()
-            should_rerank = (
-                active_mode == "hybrid_rerank"
-                or (
-                    plan.requires_reranking
-                    and self.reranker.should_rerank(
-                        query_type=plan.query_type,
-                        execution_mode="balanced",
-                        candidates=fused,
-                        confidence=conf,
+            if mode == "hybrid_rerank":
+                should_rerank = True
+            elif mode == "hybrid":
+                should_rerank = False
+            else:
+                should_rerank = (
+                    active_mode == "hybrid_rerank"
+                    or (
+                        plan.requires_reranking
+                        and self.reranker.should_rerank(
+                            query_type=plan.query_type,
+                            execution_mode="balanced",
+                            candidates=fused,
+                            confidence=conf,
+                        )
                     )
                 )
-            )
 
             if should_rerank:
                 reranked = self.reranker.rerank(
@@ -432,12 +448,35 @@ class RAGOrchestrator:
                 final_context = ctx
                 verdict = v_bal
             else:
-                if mode != "balanced" and (plan.complexity in ("medium", "high") or plan.sub_queries):
-                    escalation_reason = f"Balanced evidence gate failed: {v_bal.reason}"
-                    active_mode = "deep"
-                else:
+                # Cross-Encoder Recovery: If reranking was bypassed but evidence gate failed,
+                # invoke the cross-encoder on the fused candidates to salvage high-precision evidence.
+                if not did_rerank and mode not in ("fast", "bm25", "hybrid"):
+                    t_rec = time.perf_counter()
+                    reranked = self.reranker.rerank(
+                        query=plan.normalized_query, candidates=fused, top_k=plan.rerank_top_k
+                    )
+                    did_rerank = True
+                    latencies["reranker_recovery_ms"] = (time.perf_counter() - t_rec) * 1000
+                    if plan.requires_parent_child:
+                        reranked = self.parent_child_retriever.expand_candidates(
+                            reranked,
+                            max_parents=plan.max_parents,
+                            max_parent_tokens=plan.max_parent_tokens,
+                        )
+                    ctx = self.context_filter.filter_context(reranked, max_tokens=plan.context_budget)
+                    v_bal = self.evidence_gate.evaluate(plan.normalized_query, ctx)
+
+                if v_bal.allowed:
                     final_context = ctx
                     verdict = v_bal
+                else:
+                    # Calibrated Escalation: If evidence remains insufficient, Adaptive mode escalates to Deep Route
+                    if mode not in ("balanced", "hybrid", "hybrid_rerank"):
+                        escalation_reason = f"Balanced evidence gate failed: {v_bal.reason}"
+                        active_mode = "deep"
+                    else:
+                        final_context = ctx
+                        verdict = v_bal
 
         # -----------------------------------------------------------------
         # STAGE 3: DEEP ROUTE (Additive Expansion: Decomposition & Late Parent Expansion)
@@ -492,6 +531,49 @@ class RAGOrchestrator:
                             mq_count += len(mq_kw)
                             keyword_count += len(mq_kw)
                 latencies["multi_query_ms"] = (time.perf_counter() - t_mq) * 1000
+
+            # Bounded Iterative Multi-Hop Retrieval: bridge entity expansion
+            t_iter = time.perf_counter()
+            seed_chunks: List[Any] = []
+            for run in all_candidate_runs:
+                if run:
+                    seed_chunks.extend(run[:3])
+
+            if seed_chunks:
+                supp_chunks, hop_meta = self.iterative_retriever.execute_bounded_hop(
+                    query=plan.normalized_query,
+                    initial_chunks=seed_chunks,
+                    candidate_document_ids=c_doc_ids,
+                    metadata_filter=m_filter,
+                )
+                if supp_chunks:
+                    parsed_supp: List[SearchResult] = []
+                    for sc in supp_chunks:
+                        if isinstance(sc, SearchResult):
+                            parsed_supp.append(sc)
+                        elif hasattr(sc, "chunk_id"):
+                            parsed_supp.append(
+                                SearchResult(
+                                    chunk_id=sc.chunk_id,
+                                    document_id=getattr(sc, "document_id", "unknown"),
+                                    text=sc.text,
+                                    score=getattr(sc, "score", 0.0),
+                                    rank=getattr(sc, "rank", 1),
+                                    parent_id=getattr(sc, "parent_id", None),
+                                    source_locator=getattr(sc, "source_locator", None),
+                                    page=getattr(sc, "page", None),
+                                    section=getattr(sc, "section", None),
+                                    chunk_type="text",
+                                    retriever_name="bounded_iterative_hop",
+                                    metadata=getattr(sc, "metadata", {}),
+                                )
+                            )
+                    if parsed_supp:
+                        all_candidate_runs.append(parsed_supp)
+                        dense_count += len(parsed_supp)
+                    bridge_queries_used = hop_meta.get("bridge_queries", [])
+                    iterative_hops = hop_meta.get("hop_count", 1)
+            latencies["iterative_hop_ms"] = (time.perf_counter() - t_iter) * 1000
 
             latencies["deep_retrieval_ms"] = (time.perf_counter() - t_ret) * 1000
 
@@ -569,6 +651,8 @@ class RAGOrchestrator:
             parent_expanded=did_parent_expand,
             multi_query_used=did_multi_query,
             decomposed=did_decompose,
+            iterative_hops=iterative_hops,
+            bridge_queries=bridge_queries_used,
             dense_candidates=dense_count,
             keyword_candidates=keyword_count,
             multi_query_candidates=mq_count,
