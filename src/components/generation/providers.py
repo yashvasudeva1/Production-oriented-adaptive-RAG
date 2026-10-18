@@ -211,7 +211,7 @@ class GeminiProvider(BaseLLMProvider):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model_name: str = "gemini-2.5-flash-lite",
+        model_name: str = "gemini-3.8-flash",
         timeout: float = 14.0,
         max_retries: int = 3,
         min_request_interval: float = 4.1,
@@ -547,6 +547,7 @@ class OfflineExtractiveProvider(BaseLLMProvider):
         extracted_facts: List[Tuple[str, str, int]] = []
         scored_candidates: List[Tuple[float, str]] = []
 
+        seen_canonical = set()
         if len(source_blocks) >= 3:
             for i in range(1, len(source_blocks), 2):
                 citation_id = source_blocks[i].strip()
@@ -554,12 +555,26 @@ class OfflineExtractiveProvider(BaseLLMProvider):
                 if not block_text:
                     continue
 
+                # Normalize whitespace and strip internal linebreaks within the block
+                block_text = re.sub(r"[\r\n]+", " ", block_text)
                 sents = re.split(r"(?<=[.?!])\s+", block_text)
                 scored_sents = []
                 for s in sents:
-                    s_clean = s.strip()
+                    s_clean = re.sub(r"\s+", " ", s.strip())
+                    # Strip leading section headers like "3.2.2 Multi-Head Attention " or "Table 3: "
+                    s_clean = re.sub(
+                        r"^(?:\d+(?:\.\d+)*\s+[A-Z][A-Za-z\s-]{2,40}\b|Table\s+\d+:?|Figure\s+\d+:?)\s*",
+                        "",
+                        s_clean,
+                    ).strip()
                     if len(s_clean) < 15 or "ignore previous instructions" in s_clean.lower():
                         continue
+
+                    # Deduplication check
+                    canonical = re.sub(r"[^a-zA-Z0-9]", "", s_clean.lower())[:80]
+                    if canonical in seen_canonical:
+                        continue
+
                     s_words = set(re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", s_clean.lower()))
                     overlap = len(s_words & q_words)
 
@@ -573,11 +588,12 @@ class OfflineExtractiveProvider(BaseLLMProvider):
                     if needs_name and re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", s_clean):
                         salience += 4
 
-                    scored_sents.append((salience, s_clean))
+                    scored_sents.append((salience, s_clean, canonical))
 
                 if scored_sents:
                     scored_sents.sort(key=lambda x: x[0], reverse=True)
-                    best_sal, best_sent = scored_sents[0]
+                    best_sal, best_sent, best_can = scored_sents[0]
+                    seen_canonical.add(best_can)
                     extracted_facts.append((citation_id, best_sent, best_sal))
 
                     # Extract candidate answer spans from high-salience sentences with prioritized scoring
@@ -609,11 +625,21 @@ class OfflineExtractiveProvider(BaseLLMProvider):
             for cit_id, sent, _ in extracted_facts:
                 sentences_with_citation.append(f"{sent} [{cit_id}]")
         else:
-            sents = re.split(r"(?<=[.?!])\s+", sources_text)
+            block_text = re.sub(r"[\r\n]+", " ", sources_text)
+            sents = re.split(r"(?<=[.?!])\s+", block_text)
             for s in sents:
-                s_clean = s.strip()
+                s_clean = re.sub(r"\s+", " ", s.strip())
+                s_clean = re.sub(
+                    r"^(?:\d+(?:\.\d+)*\s+[A-Z][A-Za-z\s-]{2,40}\b|Table\s+\d+:?|Figure\s+\d+:?)\s*",
+                    "",
+                    s_clean,
+                ).strip()
                 if len(s_clean) < 15 or "ignore previous instructions" in s_clean.lower():
                     continue
+                canonical = re.sub(r"[^a-zA-Z0-9]", "", s_clean.lower())[:80]
+                if canonical in seen_canonical:
+                    continue
+                seen_canonical.add(canonical)
                 sentences_with_citation.append(f"{s_clean} [1]")
                 if len(sentences_with_citation) >= 3:
                     break
@@ -624,10 +650,14 @@ class OfflineExtractiveProvider(BaseLLMProvider):
         latency = (time.perf_counter() - t0) * 1000
 
         if sentences_with_citation:
-            base_answer = "Based on the retrieved evidence:\n\n" + "\n\n".join(sentences_with_citation[:4])
+            if len(sentences_with_citation) == 1:
+                base_answer = f"According to the source documentation, {sentences_with_citation[0]}"
+            else:
+                formatted_items = "\n".join([f"- {s}" for s in sentences_with_citation[:4]])
+                base_answer = f"Based on the retrieved evidence:\n\n{formatted_items}"
             if is_multi_hop and answer_candidates:
                 top_ans = answer_candidates[0]
-                ans = f"{base_answer}\n\nFinal Answer: \\boxed{{{top_ans}}}"
+                ans = f"{base_answer}\n\n**Key Finding**: {top_ans}"
             else:
                 ans = base_answer
         else:

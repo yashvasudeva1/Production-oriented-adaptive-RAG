@@ -25,6 +25,12 @@ GROUNDING & CITATION RULES:
 4. Do NOT manufacture or hallucinate citations (e.g., [99]).
 5. Do NOT copy over original bibliography numbers from source texts (e.g., [15], [8]). Use ONLY the assigned Source IDs [1], [2], etc.
 6. If the provided sources do not contain enough information to answer the question, state that clearly and concisely.
+
+FORMATTING & PRESENTATION:
+- Structure your response cleanly using readable Markdown paragraphs.
+- Use bullet points or numbered lists when explaining multiple features, steps, or components.
+- Bold key terms, parameters, and metrics for readability.
+- Avoid unformatted walls of text. Ensure smooth, coherent transitions between sentences.
 """
 
 MULTI_HOP_SYSTEM_PROMPT = """You are an expert analytical research assistant specializing in multi-hop reasoning, factual synthesis, and strict evidence grounding.
@@ -93,15 +99,14 @@ class GroundedGenerator:
             else:
                 effective_primary = "offline"
 
-        default_model = self.model_name or (
-            "gemini-2.5-flash-lite" if effective_primary == "gemini"
-            else "llama-3.3-70b-versatile" if effective_primary == "groq"
-            else "meta-llama/llama-3.2-3b-instruct:free" if effective_primary == "openrouter"
+        default_model = self.model_name or os.getenv("LLM_MODEL") or (
+            "gemini-3.8-flash" if effective_primary == "gemini"
+            else "qwen/qwen3.8-27b" if effective_primary == "groq"
             else "extractive-deterministic"
         )
 
-        fallback_prov = os.getenv("LLM_FALLBACK_PROVIDER", "groq" if effective_primary != "groq" else "offline")
-        fallback_mdl = os.getenv("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile")
+        fallback_prov = os.getenv("LLM_FALLBACK_PROVIDER", "gemini" if effective_primary != "gemini" else "offline")
+        fallback_mdl = os.getenv("LLM_FALLBACK_MODEL", "gemini-3.8-flash" if fallback_prov == "gemini" else "qwen/qwen3.8-27b")
         timeout = float(os.getenv("LLM_TIMEOUT", "14.0"))
         max_retries = int(os.getenv("LLM_MAX_RETRIES", "3"))
 

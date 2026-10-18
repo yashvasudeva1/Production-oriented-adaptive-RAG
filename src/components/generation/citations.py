@@ -66,7 +66,17 @@ class CitationBuilder:
             page = getattr(chunk, "page", None) or (chunk.get("page", None) if isinstance(chunk, dict) else None)
             section = getattr(chunk, "section", None) or (chunk.get("section", None) if isinstance(chunk, dict) else None)
             locator = getattr(chunk, "source_locator", None) or (chunk.get("source_locator", None) if isinstance(chunk, dict) else None)
-            fn = meta.get("filename") or f"doc_{str(did)[:8]}"
+            fn = meta.get("filename") or (meta.get("metadata", {}).get("filename") if isinstance(meta.get("metadata"), dict) else None)
+            if not fn and did:
+                try:
+                    from ..registry import SystemRegistry
+                    doc = SystemRegistry.get_doc_store().get(str(did))
+                    if doc and doc.filename:
+                        fn = doc.filename
+                except Exception:
+                    pass
+            if not fn:
+                fn = f"doc_{str(did)[:8]}"
             snippet = text[:600].replace("\n", " ").strip()
             sources.append(
                 CitationSource(

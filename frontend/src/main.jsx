@@ -27,16 +27,13 @@ import './styles.css';
 const API_BASE_DEFAULT = (import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8000').replace(/\/$/, '');
 const REPO_URL = 'https://github.com/yashvasudeva1/Production_RAG';
 const DEMO_DOCS = [
-  {id:'doc-001',name:'Attention Is All You Need.pdf',type:'PDF',chunks:42,status:'INDEXED',size:'2.4 MB',updated:'Today, 10:42'},
-  {id:'doc-002',name:'NITI Aayog Internship Guidelines.pdf',type:'PDF',chunks:28,status:'INDEXED',size:'86 KB',updated:'Today, 09:18'},
-  {id:'doc-003',name:'Yash Vasudeva Resume.pdf',type:'PDF',chunks:12,status:'INDEXED',size:'110 KB',updated:'Yesterday'},
-  {id:'doc-004',name:'Nexus Architecture Specification.md',type:'MD',chunks:31,status:'INDEXED',size:'112 KB',updated:'Oct 15'},
+  {id:'doc_d87d482d5ae7960e2e43',name:'Attention Is All You Need.pdf',type:'PDF',chunks:60,status:'INDEXED',size:'569 KB',updated:'Indexed'},
 ];
 const DEMO_QUESTIONS = [
+  'How many attention heads does the base model use?',
   'What is the Transformer architecture and self-attention mechanism?',
-  'What is the maximum internship duration in NITI Aayog?',
-  'What are the technical skills and projects of Yash Vasudeva?',
-  'How does the system decide when to rerank?',
+  'What are the dimensions of d_model and d_k in the paper?',
+  'What BLEU score did the Transformer achieve on English-to-German translation?',
 ];
 const BENCH = {
   cases:110, mrr:0.789, recall:0.8556, precision:0.575, hitRate:0.844, ndcg:0.7723,
@@ -98,8 +95,8 @@ function App() {
         abstained: false,
         latency_ms: 24.5,
         sources: [
-          { citation_id: 1, chunk_id: 'chk_b4186bd0e50776d7', filename: '1706.03762v7.pdf', page: 9, section: 'Model Variations', snippet: 'In Table 3 rows (A), we vary the number of attention heads...' },
-          { citation_id: 2, chunk_id: 'chk_8b20a8b1516452ec', filename: '1706.03762v7.pdf', page: 5, section: '3.2.2 Multi-Head Attention', snippet: 'In this work we employ h = 8 parallel attention layers, or heads. For each of these we use dk = dv = dmodel/h = 64.' }
+          { citation_id: 1, chunk_id: 'chk_b4186bd0e50776d7', filename: 'Attention_Is_All_You_Need.pdf', page: 9, section: 'Model Variations', snippet: 'In Table 3 rows (A), we vary the number of attention heads...' },
+          { citation_id: 2, chunk_id: 'chk_8b20a8b1516452ec', filename: 'Attention_Is_All_You_Need.pdf', page: 5, section: '3.2.2 Multi-Head Attention', snippet: 'In this work we employ h = 8 parallel attention layers, or heads. For each of these we use dk = dv = dmodel/h = 64.' }
         ],
         retrieval: {
           execution_mode: 'fast',
@@ -604,11 +601,148 @@ function WorkspacePage({query,setQuery,mode,setMode,busy,answer,error,runQuery,q
   </div>;
 }
 
+function renderInlineContent(text, onCitationClick) {
+  if (!text) return null;
+  const tokens = [];
+  const regex = /(\[\d+\])|(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)/g;
+  let lastIndex = 0;
+  let match;
+  let keyIdx = 0;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      tokens.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith('[') && token.endsWith(']')) {
+      const num = token.slice(1, -1);
+      tokens.push(
+        <button
+          key={`cit-${keyIdx++}`}
+          type="button"
+          className="citation-badge"
+          onClick={() => onCitationClick?.(num)}
+          title={`View source [${num}]`}
+        >
+          [{num}]
+        </button>
+      );
+    } else if (token.startsWith('`') && token.endsWith('`')) {
+      tokens.push(
+        <code key={`code-${keyIdx++}`} className="inline-code">
+          {token.slice(1, -1)}
+        </code>
+      );
+    } else if (token.startsWith('**') && token.endsWith('**')) {
+      tokens.push(
+        <strong key={`bold-${keyIdx++}`}>
+          {token.slice(2, -2)}
+        </strong>
+      );
+    } else if (token.startsWith('*') && token.endsWith('*')) {
+      tokens.push(
+        <em key={`em-${keyIdx++}`}>
+          {token.slice(1, -1)}
+        </em>
+      );
+    }
+    lastIndex = match.index + token.length;
+  }
+  if (lastIndex < text.length) {
+    tokens.push(text.slice(lastIndex));
+  }
+  return tokens;
+}
+
+function FormattedAnswer({ text, onCitationClick }) {
+  if (!text) return null;
+
+  // Clean raw LaTeX boxed if any: \boxed{8} -> **8**
+  let cleanText = text.replace(/\\boxed\{([^}]+)\}/g, '**$1**');
+  // Replace em-dashes with -
+  cleanText = cleanText.replace(/-/g, '-');
+
+  const blocks = cleanText.split(/\n\s*\n/);
+
+  return (
+    <div className="answer-formatted">
+      {blocks.map((block, bIdx) => {
+        const trimmed = block.trim();
+        if (!trimmed) return null;
+
+        // Code block
+        if (trimmed.startsWith('```') && trimmed.endsWith('```')) {
+          const lines = trimmed.split('\n');
+          const code = lines.slice(1, -1).join('\n');
+          return (
+            <pre key={bIdx} className="answer-code-block">
+              <code>{code}</code>
+            </pre>
+          );
+        }
+
+        // Header: ### or ## or #
+        const hMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
+        if (hMatch) {
+          return (
+            <h4 key={bIdx} className="answer-heading">
+              {renderInlineContent(hMatch[2], onCitationClick)}
+            </h4>
+          );
+        }
+
+        // Bullet list
+        const lines = trimmed.split('\n');
+        const isBulletList = lines.length > 0 && lines.every(l => /^\s*[-*•]\s+/.test(l));
+        if (isBulletList) {
+          return (
+            <ul key={bIdx} className="answer-ul">
+              {lines.map((l, lIdx) => {
+                const itemText = l.replace(/^\s*[-*•]\s+/, '');
+                return (
+                  <li key={lIdx} className="answer-li">
+                    {renderInlineContent(itemText, onCitationClick)}
+                  </li>
+                );
+              })}
+            </ul>
+          );
+        }
+
+        // Numbered list
+        const isNumberedList = lines.length > 0 && lines.every(l => /^\s*\d+\.\s+/.test(l));
+        if (isNumberedList) {
+          return (
+            <ol key={bIdx} className="answer-ol">
+              {lines.map((l, lIdx) => {
+                const itemText = l.replace(/^\s*\d+\.\s+/, '');
+                return (
+                  <li key={lIdx} className="answer-li">
+                    {renderInlineContent(itemText, onCitationClick)}
+                  </li>
+                );
+              })}
+            </ol>
+          );
+        }
+
+        // Paragraph
+        const pText = lines.map(l => l.trim()).join(' ');
+        return (
+          <p key={bIdx} className="answer-p">
+            {renderInlineContent(pText, onCitationClick)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 function AnswerPanel({answer,isBusy}) {
   const sources=answer.sources||[];const confidence=answer.confidence;const retrieval=answer.retrieval||{};const breakdown=retrieval.latency_breakdown_ms||{};
   const [tab,setTab]=useState('answer');const [copied,setCopied]=useState(false);
   async function copyAnswer(){try{await navigator.clipboard.writeText(answer.answer||'');setCopied(true);setTimeout(()=>setCopied(false),1400)}catch{setCopied(false)}}
-  return <section className="answer-panel page-enter"><div className="answer-panel-top"><div className="answer-label"><span className="answer-spark"><Sparkles size={14}/></span><span><b>Response</b><small>{isBusy?'Generating answer':'Completed response'}</small></span></div><div className="answer-actions"><Tag tone={answer.abstained?'amber':'green'} dot>{answer.abstained?'Abstained':(answer.citation_validation?.valid===false?'Review citations':'Evidence returned')}</Tag><IconButton label="Copy answer" onClick={copyAnswer}>{copied?<Check size={16}/>:<Copy size={16}/>}</IconButton></div></div><div className="answer-stats"><span><span className="stat-label">ROUTE</span><b>{safeText(answer.execution_mode||retrieval.execution_mode,'Adaptive').toUpperCase()}</b></span><span><span className="stat-label">CONFIDENCE</span><b>{confidence==null?'-':fmt(confidence,2)}</b></span><span><span className="stat-label">LATENCY</span><b>{answer.latency_ms==null?'-':`${fmt(answer.latency_ms,0)} ms`}</b></span><span><span className="stat-label">SOURCES</span><b>{sources.length}</b></span></div><div className="answer-tabs"><button className={tab==='answer'?'active':''} onClick={()=>setTab('answer')}>Answer</button><button className={tab==='sources'?'active':''} onClick={()=>setTab('sources')}>Sources <span>{sources.length}</span></button><button className={tab==='trace'?'active':''} onClick={()=>setTab('trace')}>Execution trace</button></div>{tab==='answer'&&<div className="answer-body">{answer.answer?<p className="answer-text">{answer.answer}</p>:<span className="subtle">Waiting for answer tokens…</span>}{answer.abstention_reason&&<div className="abstention-note"><ShieldCheck size={16}/><div><b>Evidence gate abstention</b><p>{answer.abstention_reason}</p></div></div>}{sources.length>0&&<div className="inline-sources"><span>SUPPORTED BY</span>{sources.map((s,i)=><span key={`${s.citation_id}-${i}`} className="inline-source-chip">[{s.citation_id||i+1}] {s.filename||s.document_id||'Source'}</span>)}</div>}</div>}{tab==='sources'&&<div className="answer-body source-detail-list">{sources.length?sources.map((s,i)=><article className="source-detail" key={`${s.chunk_id||s.document_id}-${i}`}><span className="source-number">[{s.citation_id||i+1}]</span><div><b>{s.filename||s.document_id||'Source document'}</b><p>{s.snippet||'Source returned without a preview snippet.'}</p><small>{[s.page&&`Page ${s.page}`,s.section,s.chunk_id&&`Chunk ${s.chunk_id}`].filter(Boolean).join(' · ')||'Retrieved evidence'}</small></div></article>):<div className="empty-state small-empty"><FileSearch size={21}/><b>No source records returned</b><p>The backend did not attach source references to this answer.</p></div>}</div>}{tab==='trace'&&<div className="answer-body"><div className="trace-list">{[['Query planning',breakdown.planning_ms??breakdown.query_planning_ms],[breakdown.hybrid_retrieval_ms!=null?'Hybrid retrieval (BM25 + Dense)':'Fast BM25 retrieval',breakdown.hybrid_retrieval_ms??breakdown.fast_retrieval_ms],['Fusion & confidence',breakdown.fusion_ms??breakdown.confidence_ms],['Reranking',breakdown.rerank_ms],['Parent expansion',breakdown.parent_expansion_ms],['Generation',breakdown.generation_ms]].map(([name,val],i)=><div className="trace-row" key={name}><span className={`trace-dot ${val==null?'muted':''}`}/><span>{name}</span><b>{val==null?'Not reported':`${fmt(val,1)} ms`}</b></div>)}</div><p className="trace-footnote">Stage timings are shown only when the API returns them. Missing values are not inferred.</p></div>}</section>;
+  return <section className="answer-panel page-enter"><div className="answer-panel-top"><div className="answer-label"><span className="answer-spark"><Sparkles size={14}/></span><span><b>Response</b><small>{isBusy?'Generating answer':'Completed response'}</small></span></div><div className="answer-actions"><Tag tone={answer.abstained?'amber':'green'} dot>{answer.abstained?'Abstained':(answer.citation_validation?.valid===false?'Review citations':'Evidence returned')}</Tag><IconButton label="Copy answer" onClick={copyAnswer}>{copied?<Check size={16}/>:<Copy size={16}/>}</IconButton></div></div><div className="answer-stats"><span><span className="stat-label">ROUTE</span><b>{safeText(answer.execution_mode||retrieval.execution_mode,'Adaptive').toUpperCase()}</b></span><span><span className="stat-label">CONFIDENCE</span><b>{confidence==null?'-':fmt(confidence,2)}</b></span><span><span className="stat-label">LATENCY</span><b>{answer.latency_ms==null?'-':`${fmt(answer.latency_ms,0)} ms`}</b></span><span><span className="stat-label">SOURCES</span><b>{sources.length}</b></span></div><div className="answer-tabs"><button className={tab==='answer'?'active':''} onClick={()=>setTab('answer')}>Answer</button><button className={tab==='sources'?'active':''} onClick={()=>setTab('sources')}>Sources <span>{sources.length}</span></button><button className={tab==='trace'?'active':''} onClick={()=>setTab('trace')}>Execution trace</button></div>{tab==='answer'&&<div className="answer-body">{answer.answer?<FormattedAnswer text={answer.answer} onCitationClick={()=>setTab('sources')}/>:<span className="subtle">Waiting for answer tokens…</span>}{answer.abstention_reason&&<div className="abstention-note"><ShieldCheck size={16}/><div><b>Evidence gate abstention</b><p>{answer.abstention_reason}</p></div></div>}{sources.length>0&&<div className="inline-sources"><span>SUPPORTED BY</span>{sources.map((s,i)=><button key={`${s.citation_id}-${i}`} type="button" className="inline-source-chip" onClick={()=>setTab('sources')} style={{cursor:'pointer'}}> [{s.citation_id||i+1}] {s.filename||s.document_id||'Source'}</button>)}</div>}</div>}{tab==='sources'&&<div className="answer-body source-detail-list">{sources.length?sources.map((s,i)=><article className="source-detail" key={`${s.chunk_id||s.document_id}-${i}`}><span className="source-number">[{s.citation_id||i+1}]</span><div><b>{s.filename||s.document_id||'Source document'}</b><p>{s.snippet||'Source returned without a preview snippet.'}</p><small>{[s.page&&`Page ${s.page}`,s.section,s.chunk_id&&`Chunk ${s.chunk_id}`].filter(Boolean).join(' · ')||'Retrieved evidence'}</small></div></article>):<div className="empty-state small-empty"><FileSearch size={21}/><b>No source records returned</b><p>The backend did not attach source references to this answer.</p></div>}</div>}{tab==='trace'&&<div className="answer-body"><div className="trace-list">{[['Query planning',breakdown.planning_ms??breakdown.query_planning_ms],[breakdown.hybrid_retrieval_ms!=null?'Hybrid retrieval (BM25 + Dense)':'Fast BM25 retrieval',breakdown.hybrid_retrieval_ms??breakdown.fast_retrieval_ms],['Fusion & confidence',breakdown.fusion_ms??breakdown.confidence_ms],['Reranking',breakdown.rerank_ms],['Parent expansion',breakdown.parent_expansion_ms],['Generation',breakdown.generation_ms]].map(([name,val],i)=><div className="trace-row" key={name}><span className={`trace-dot ${val==null?'muted':''}`}/><span>{name}</span><b>{val==null?'Not reported':`${fmt(val,1)} ms`}</b></div>)}</div><p className="trace-footnote">Stage timings are shown only when the API returns them. Missing values are not inferred.</p></div>}</section>;
 }
 
 function MetricsPage({isLive,health,metrics,refreshOverview}) {
