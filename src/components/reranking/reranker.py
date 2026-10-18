@@ -297,6 +297,33 @@ class CrossEncoderReranker:
                 )
             )
 
+        # Blended reranking: prevent cross-encoder noise from overwriting high-consensus
+        # retrieval rankings. S_final = 0.65*sigmoid(CE) + 0.35*RRF_norm
+        # This preserves chunks with BM25+Dense+exact-match consensus.
+        if scored_results:
+            # Compute min/max raw cross-encoder scores for normalization
+            ce_scores = [r.rerank_score for r in scored_results]
+            ce_min = min(ce_scores)
+            ce_max = max(ce_scores)
+            ce_spread = ce_max - ce_min
+
+            # RRF scores are stored in fusion_score; normalize them too
+            rrf_vals = [r.fusion_score for r in scored_results if r.fusion_score is not None]
+            rrf_min = min(rrf_vals) if rrf_vals else 0.0
+            rrf_max = max(rrf_vals) if rrf_vals else 1.0
+            rrf_spread = rrf_max - rrf_min
+
+            alpha = 0.65  # Weight for cross-encoder signal
+            for r in scored_results:
+                # Sigmoid-normalize cross-encoder score (maps logits to [0,1])
+                ce_sig = 1.0 / (1.0 + math.exp(-r.rerank_score)) if abs(r.rerank_score) < 20 else (1.0 if r.rerank_score > 0 else 0.0)
+                # Min-max normalize RRF fusion score
+                fus = r.fusion_score if r.fusion_score is not None else 0.0
+                rrf_norm = (fus - rrf_min) / (rrf_spread + 1e-9) if rrf_spread > 1e-6 else 0.5
+                # Blended final score
+                r.rerank_score = alpha * ce_sig + (1.0 - alpha) * rrf_norm
+                r.score = r.rerank_score
+
         scored_results.sort(key=lambda r: r.rerank_score, reverse=True)
 
         for rank, r in enumerate(scored_results[:k], start=1):

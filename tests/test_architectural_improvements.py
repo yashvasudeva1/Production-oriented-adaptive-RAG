@@ -1,0 +1,227 @@
+from __future__ import annotations
+
+import math
+from typing import List
+import pytest
+
+from src.components.chunking.models import Chunk
+from src.components.indexing.models import SearchResult
+from src.components.indexing.qdrant_indexer import QdrantIndexer
+from src.components.reranker import CrossEncoderReranker, RerankerResult
+from src.components.retrieval.confidence import RetrievalConfidenceScorer
+from src.components.retrieval.fusion import UnifiedCandidate, reciprocal_rank_fusion
+
+
+def test_confidence_gate_conditional_weight_masking():
+    """
+    Verify Fix 1:
+    - Identifier weight is masked out when query has no technical identifiers
+    - Denominator renormalizes over active weights so score is not artificially depressed
+    - Z-score margin is used
+    - Default high threshold is calibrated to 0.74
+    """
+    scorer = RetrievalConfidenceScorer()
+    assert scorer.high_threshold == 0.74
+
+    candidates = [
+        SearchResult(
+            chunk_id="c1",
+            document_id="doc1",
+            text="Antigravity architecture uses reciprocal rank fusion for hybrid search.",
+            score=0.95,
+            rank=1,
+            retriever_name="dense_qdrant",
+            metadata={"provenance_sources": ["dense", "bm25"]},
+        ),
+        SearchResult(
+            chunk_id="c2",
+            document_id="doc1",
+            text="Reciprocal rank fusion combines sparse and dense vectors.",
+            score=0.60,
+            rank=2,
+            retriever_name="dense_qdrant",
+            metadata={"provenance_sources": ["dense"]},
+        ),
+        SearchResult(
+            chunk_id="c3",
+            document_id="doc1",
+            text="General overview of data indexing and vector storage.",
+            score=0.10,
+            rank=3,
+            retriever_name="keyword_bm25",
+            metadata={"provenance_sources": ["bm25"]},
+        ),
+    ]
+
+    # Case A: Query with NO identifiers - active weights exclude w_id
+    query_no_id = "How does reciprocal rank fusion work in hybrid search?"
+    conf_no_id = scorer.score_candidates(
+        query=query_no_id,
+        candidates=candidates,
+        execution_mode="balanced",
+        exact_identifiers=[],
+    )
+    assert conf_no_id.score > 0.0
+    assert "exact_id_ratio" in conf_no_id.signals
+    assert conf_no_id.score >= 0.58
+
+    # Case B: Query with explicit identifiers - w_id included in denominator
+    conf_with_id = scorer.score_candidates(
+        query=query_no_id,
+        candidates=candidates,
+        execution_mode="balanced",
+        exact_identifiers=["antigravity"],
+    )
+    assert len(conf_with_id.exact_identifier_matches) == 1
+    assert conf_with_id.score > 0.0
+
+    # Case C: High-consensus candidates reaching calibrated threshold >= 0.74 (Fast Path)
+    high_candidates = [
+        SearchResult(
+            chunk_id="h1",
+            document_id="doc1",
+            text="Reciprocal rank fusion combines sparse and dense vectors in hybrid search.",
+            score=0.98,
+            rank=1,
+            retriever_name="hybrid",
+            metadata={"provenance_sources": ["dense", "bm25"]},
+        ),
+        SearchResult(
+            chunk_id="h2",
+            document_id="doc1",
+            text="Reciprocal rank fusion combines sparse and dense vectors in hybrid search.",
+            score=0.95,
+            rank=2,
+            retriever_name="hybrid",
+            metadata={"provenance_sources": ["dense", "bm25"]},
+        ),
+    ]
+    conf_high = scorer.score_candidates(
+        query="reciprocal rank fusion hybrid search",
+        candidates=high_candidates,
+        execution_mode="balanced",
+        exact_identifiers=[],
+    )
+    assert conf_high.score >= 0.74
+    assert conf_high.tier == "high"
+
+
+def test_balanced_rrf_weights_and_k_constant():
+    """
+    Verify Fix 2:
+    - Default RRF constant is k=20 (down from 60)
+    - Default weights are 0.45 BM25 / 0.55 Dense (reflecting upgraded dense retriever)
+    """
+    bm25_cands = [
+        SearchResult(chunk_id="doc_a", document_id="d1", text="bm25 first", score=12.0, rank=1, retriever_name="bm25"),
+        SearchResult(chunk_id="doc_b", document_id="d2", text="bm25 second", score=8.0, rank=2, retriever_name="bm25"),
+    ]
+    dense_cands = [
+        SearchResult(chunk_id="doc_b", document_id="d2", text="dense first", score=0.92, rank=1, retriever_name="dense"),
+        SearchResult(chunk_id="doc_c", document_id="d3", text="dense second", score=0.85, rank=2, retriever_name="dense"),
+    ]
+
+    fused = reciprocal_rank_fusion(bm25_results=bm25_cands, dense_results=dense_cands)
+    assert len(fused) == 3
+
+    # doc_b has consensus (rank 2 BM25 + rank 1 Dense) -> should rank #1
+    assert fused[0].chunk_id == "doc_b"
+
+    # Verify that rank 1 under k=20 carries more weight: 1/(20+1) = 0.0476 vs 1/(60+1) = 0.0164
+    k20_top_dense = 0.55 * (1.0 / (20 + 1))
+    assert fused[0].score > k20_top_dense
+
+
+def test_blended_reranking_formula():
+    """
+    Verify Fix 3:
+    Blended reranking computes:
+    S_final(d) = 0.65 * sigmoid(CrossEncoder(q, d)) + 0.35 * RRF_norm(d)
+    This prevents cross-encoder noise from overwriting consensus.
+    """
+    reranker = CrossEncoderReranker(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+    # In test environment, fallback score or loaded model will be blended with fusion score
+    candidates = [
+        UnifiedCandidate(
+            chunk_id="c1",
+            document_id="d1",
+            text="High consensus chunk with exact technical match",
+            fusion_score=0.08,
+            score=0.08,
+            provenance_sources=["dense", "bm25"],
+        ),
+        UnifiedCandidate(
+            chunk_id="c2",
+            document_id="d2",
+            text="Low consensus chunk with partial match",
+            fusion_score=0.02,
+            score=0.02,
+            provenance_sources=["dense"],
+        ),
+    ]
+
+    results = reranker.rerank(query="technical match", candidates=candidates, top_k=2)
+    assert len(results) == 2
+    # Verify scores are normalized in [0, 1] range due to sigmoid + min-max blend
+    for r in results:
+        assert 0.0 <= r.rerank_score <= 1.0
+        assert r.score == r.rerank_score
+
+
+def test_qdrant_native_sparse_hybrid_search():
+    """
+    Verify Fix 5:
+    QdrantIndexer with enable_sparse=True indexes both dense and fastembed BM25 sparse vectors,
+    executing server-side RRF via Prefetch + FusionQuery(RRF).
+    """
+    indexer = QdrantIndexer(
+        collection_name="test_sparse_hybrid",
+        vector_size=4,
+        distance="Dot",
+        enable_sparse=True,
+    )
+
+    chunks = [
+        Chunk(
+            chunk_id="chunk_sparse_1",
+            document_id="doc_alpha",
+            text="The quick brown fox jumps over the lazy dog.",
+        ),
+        Chunk(
+            chunk_id="chunk_sparse_2",
+            document_id="doc_beta",
+            text="Quantum computing and artificial intelligence breakthroughs.",
+        ),
+    ]
+    # Synthetic dense embeddings
+    embeddings = [
+        [0.5, 0.5, 0.0, 0.0],
+        [0.0, 0.0, 0.7, 0.7],
+    ]
+
+    upserted = indexer.upsert_chunks(chunks=chunks, embeddings=embeddings)
+    assert upserted == 2
+
+    # Query matching chunk 1 lexically and semantically
+    results = indexer.hybrid_search(
+        query_text="brown fox jumps",
+        query_vector=[0.5, 0.5, 0.0, 0.0],
+        top_k=2,
+    )
+
+    assert len(results) >= 1
+    assert results[0].chunk_id == "chunk_sparse_1"
+    assert results[0].retriever_name == "native_hybrid_qdrant"
+
+    # Verify single-engine transactional document deletion
+    deleted = indexer.delete_by_document_id("doc_alpha")
+    assert deleted is True
+
+    # After deletion, only chunk_sparse_2 remains
+    remaining = indexer.hybrid_search(
+        query_text="quantum computing",
+        query_vector=[0.0, 0.0, 0.7, 0.7],
+        top_k=2,
+    )
+    chunk_ids = [r.chunk_id for r in remaining]
+    assert "chunk_sparse_1" not in chunk_ids

@@ -377,7 +377,7 @@ class RAGOrchestrator:
             fused = fuse_candidates(
                 all_candidate_runs,
                 method=self.config.fusion_method,
-                k=60,
+                k=20,
                 top_n=max(15, plan.top_k * 2),
                 exact_identifiers=exact_ids,
             )
@@ -502,14 +502,37 @@ class RAGOrchestrator:
                     all_candidate_runs.append(base_kw)
                     keyword_count += len(base_kw)
 
-            # Sub-query searches added additively on fine-grained child chunks (both dense and lexical)
+            # Sub-query searches: run per-sub-query RRF fusion + relevance threshold.
+            # Prevents irrelevant sub-query chunks from polluting the global context.
+            _MIN_SUBQ_THRESHOLD_RATIO = 0.40  # Keep chunks at >= 40% of top sub-query RRF score
             for sub_q in sub_queries[:3]:
                 sub_dense = self._search_dense(sub_q, c_doc_ids, plan.top_k_dense, metadata_filter=m_filter)
-                if sub_dense:
+                sub_kw = self._search_keyword(sub_q, c_doc_ids, plan.top_k_keyword, plan.retrieval_signals, metadata_filter=m_filter)
+
+                # Fuse sub-query dense + keyword via RRF before adding to global pool
+                sub_q_runs = [r for r in [sub_dense, sub_kw] if r]
+                if sub_q_runs:
+                    from ..retrieval.fusion import fuse_candidates as _fuse
+                    sub_fused = _fuse(
+                        sub_q_runs,
+                        method=self.config.fusion_method,
+                        k=20,
+                        top_n=plan.top_k_dense,
+                        exact_identifiers=exact_ids,
+                    )
+                    if sub_fused:
+                        # Apply minimum relevance threshold: discard low-signal chunks
+                        top_sub_score = sub_fused[0].score if sub_fused[0].score > 0 else 1e-6
+                        threshold = top_sub_score * _MIN_SUBQ_THRESHOLD_RATIO
+                        filtered_sub = [c for c in sub_fused if c.score >= threshold]
+                        if filtered_sub:
+                            all_candidate_runs.append(filtered_sub)
+                            dense_count += len([c for c in filtered_sub if c.dense_score is not None])
+                            keyword_count += len([c for c in filtered_sub if c.keyword_score is not None])
+                elif sub_dense:
                     all_candidate_runs.append(sub_dense)
                     dense_count += len(sub_dense)
-                sub_kw = self._search_keyword(sub_q, c_doc_ids, plan.top_k_keyword, plan.retrieval_signals, metadata_filter=m_filter)
-                if sub_kw:
+                elif sub_kw:
                     all_candidate_runs.append(sub_kw)
                     keyword_count += len(sub_kw)
 
@@ -582,7 +605,7 @@ class RAGOrchestrator:
             deep_fused = fuse_candidates(
                 all_candidate_runs,
                 method=self.config.fusion_method,
-                k=60,
+                k=20,
                 top_n=plan.top_k * 2,
                 exact_identifiers=exact_ids,
             )

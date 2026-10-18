@@ -49,9 +49,9 @@ class UnifiedCandidate(BaseModel):
 def reciprocal_rank_fusion(
     bm25_results: Any = None,
     dense_results: Any = None,
-    k: int = 60,
-    bm25_weight: float = 0.82,  # Shields our elite lexical precision baseline
-    dense_weight: float = 0.18,
+    k: int = 20,
+    bm25_weight: float = 0.45,  # Balanced BM25/Dense with improved BGE dense model
+    dense_weight: float = 0.55,
     candidate_lists: Optional[Sequence[Sequence[Any]]] = None,
     top_n: Optional[int] = None,
     exact_identifiers: Optional[Sequence[str]] = None,
@@ -202,7 +202,7 @@ def reciprocal_rank_fusion(
 def weighted_rrf(
     candidate_lists: Sequence[Sequence[Any]],
     weights: Sequence[float],
-    k: int = 60,
+    k: int = 20,
     top_n: int = 20,
     exact_identifiers: Optional[Sequence[str]] = None,
 ) -> List[UnifiedCandidate]:

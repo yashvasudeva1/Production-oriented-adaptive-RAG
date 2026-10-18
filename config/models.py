@@ -49,10 +49,13 @@ class AppConfig:
         default_factory=lambda: os.getenv("CONDITIONAL_RERANKING_ENABLED", "true").lower() in ("true", "1", "yes")
     )
     confidence_high_threshold: float = field(
-        default_factory=lambda: float(os.getenv("CONFIDENCE_HIGH_THRESHOLD", "0.85"))
+        default_factory=lambda: float(os.getenv("CONFIDENCE_HIGH_THRESHOLD", "0.74"))
     )
     confidence_medium_threshold: float = field(
         default_factory=lambda: float(os.getenv("CONFIDENCE_MEDIUM_THRESHOLD", "0.60"))
+    )
+    qdrant_sparse_enabled: bool = field(
+        default_factory=lambda: os.getenv("QDRANT_SPARSE_ENABLED", "false").lower() in ("true", "1", "yes")
     )
     max_parent_expansions: int = field(
         default_factory=lambda: int(os.getenv("MAX_PARENT_EXPANSIONS", "3"))

@@ -54,7 +54,7 @@ class RetrievalConfidenceScorer:
         min_coverage_fast: float = 0.50,
         min_coverage_balanced: float = 0.35,
         min_top_score_bm25: float = 2.0,
-        confidence_high_threshold: float = 0.85,
+        confidence_high_threshold: float = 0.74,
         confidence_medium_threshold: float = 0.60,
     ) -> None:
         self.min_coverage_fast = min_coverage_fast
@@ -131,34 +131,53 @@ class RetrievalConfidenceScorer:
         # 5. Dense / Lexical agreement signal
         agreement_count = 0
         for c in top_candidates:
-            prov = getattr(c, "provenance_sources", [])
-            has_dense = any("dense" in p for p in prov) or getattr(c, "dense_score", None) is not None
-            has_bm25 = any("keyword" in p or "bm25" in p for p in prov) or getattr(c, "keyword_score", None) is not None
+            prov = getattr(c, "provenance_sources", None) or (getattr(c, "metadata", {}) or {}).get("provenance_sources", [])
+            has_dense = any("dense" in str(p).lower() for p in prov) or getattr(c, "dense_score", None) is not None
+            has_bm25 = any("keyword" in str(p).lower() or "bm25" in str(p).lower() for p in prov) or getattr(c, "keyword_score", None) is not None
             if has_dense and has_bm25:
                 agreement_count += 1
         agreement_ratio = agreement_count / max(1, len(top_candidates))
 
-        # 6. Synthesize confidence score
-        # Base weights calibrated against retrieval signals
+        # 6. Synthesize confidence score with conditional weight masking.
+        # Only include identifier signal when identifiers are detected in the query,
+        # preventing w_id from diluting the score on general open-domain queries.
         w_cov = 0.35
         w_id = 0.30
         w_margin = 0.15
         w_agree = 0.20
 
-        # Normalized score signals
-        norm_margin = min(1.0, relative_margin * 2.0)
-        conf_score = (
-            w_cov * term_cov
-            + w_id * id_ratio
-            + w_margin * norm_margin
-            + w_agree * agreement_ratio
-        )
+        # Z-score margin: relative spread across all top-5 scores (robust to RRF compression)
+        s10 = scores[-1] if len(scores) >= 2 else scores[0] if scores else 0.0
+        z_margin = (top_score - s2) / (top_score - s10 + 1e-6) if (top_score - s10) > 1e-6 else 0.0
+        norm_margin = min(1.0, max(0.0, z_margin))
+
+        # Conditional masking: exclude identifier weight when no identifiers detected
+        if req_ids:
+            # Identifiers detected: include all signals
+            active_weight_sum = w_cov + w_id + w_margin + w_agree
+            conf_score = (
+                w_cov * term_cov
+                + w_id * id_ratio
+                + w_margin * norm_margin
+                + w_agree * agreement_ratio
+            ) / active_weight_sum
+        else:
+            # No identifiers: renormalize over remaining active signals
+            active_weight_sum = w_cov + w_margin + w_agree
+            conf_score = (
+                w_cov * term_cov
+                + w_margin * norm_margin
+                + w_agree * agreement_ratio
+            ) / active_weight_sum
 
         # Mode-specific adjustments
         if execution_mode == "fast":
             # For BM25-only fast route, agreement signal is not present
             bm25_norm = min(1.0, top_score / 12.0)
-            conf_score = 0.50 * term_cov + 0.35 * id_ratio + 0.15 * bm25_norm
+            if req_ids:
+                conf_score = 0.45 * term_cov + 0.30 * id_ratio + 0.15 * norm_margin + 0.10 * bm25_norm
+            else:
+                conf_score = 0.55 * term_cov + 0.25 * norm_margin + 0.20 * bm25_norm
 
         conf_score = max(0.0, min(1.0, conf_score))
 
