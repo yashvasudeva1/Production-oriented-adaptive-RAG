@@ -152,9 +152,9 @@ def main() -> None:
         file.write("OpenRouter and Groq are filtered using their current provider model/free-plan information.\n")
         file.write("Hugging Face is listed separately because its free plan provides monthly inference credits rather than a fixed permanently-free model list.\n\n")
 
-        write_model_section(file, "OPENROUTER — FREE MODELS", results["OpenRouter"])
-        write_model_section(file, "GROQ — FREE PLAN MODELS", results["Groq"])
-        write_model_section(file, "HUGGING FACE — MODELS ACCESSIBLE THROUGH HF INFERENCE PROVIDERS", results["Hugging Face"])
+        write_model_section(file, "OPENROUTER - FREE MODELS", results["OpenRouter"])
+        write_model_section(file, "GROQ - FREE PLAN MODELS", results["Groq"])
+        write_model_section(file, "HUGGING FACE - MODELS ACCESSIBLE THROUGH HF INFERENCE PROVIDERS", results["Hugging Face"])
 
     print(f"Saved {OUTPUT_FILE}")
 

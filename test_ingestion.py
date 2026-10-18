@@ -154,7 +154,7 @@ def record(name: str, status: str, detail: str = "") -> None:
         SKIP: "○",
     }
 
-    suffix = f" — {detail}" if detail else ""
+    suffix = f" - {detail}" if detail else ""
     print(f"{symbols[status]} {name}{suffix}")
 
 
@@ -983,7 +983,7 @@ def test_media_actual() -> None:
 
 def main() -> int:
     print("-" * 72)
-    print("Nexus — Ingestion Component Test Suite")
+    print("Nexus - Ingestion Component Test Suite")
     print(f"Project root:     {PROJECT_ROOT}")
     print(f"Ingestion import: {INGESTION_PACKAGE}")
     print("-" * 72)

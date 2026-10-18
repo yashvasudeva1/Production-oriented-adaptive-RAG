@@ -117,7 +117,7 @@ class QueryPlanner:
                 # Low-confidence document_type → soft hint only
                 logger.debug(
                     f"[planner] Soft hint: document_type={extracted_meta['document_type']} "
-                    f"(conf={field_confidence.get('document_type', 'low')}) — not applied as hard filter"
+                    f"(conf={field_confidence.get('document_type', 'low')}) - not applied as hard filter"
                 )
 
             # department → always high confidence if present
@@ -139,7 +139,7 @@ class QueryPlanner:
             elif extracted_meta.get("organizations"):
                 logger.debug(
                     f"[planner] Soft hint: organizations={extracted_meta['organizations']} "
-                    f"(conf={field_confidence.get('organizations', 'low')}) — not applied as hard filter"
+                    f"(conf={field_confidence.get('organizations', 'low')}) - not applied as hard filter"
                 )
 
             # dates → hard filter only if confidence is sufficient
@@ -158,7 +158,7 @@ class QueryPlanner:
                 # Year mentioned in query context → soft retrieval hint only
                 logger.debug(
                     f"[planner] Soft hint: dates={extracted_meta['dates']} "
-                    f"(conf={field_confidence.get('dates', 'low')}) — not applied as hard filter"
+                    f"(conf={field_confidence.get('dates', 'low')}) - not applied as hard filter"
                 )
 
             # locations → hard filter only if confidence is sufficient

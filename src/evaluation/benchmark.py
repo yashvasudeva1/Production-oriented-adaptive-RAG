@@ -348,7 +348,7 @@ def run_benchmark(
         report.max_latency_ms = max(latencies)
 
     # Per-category metrics
-    # FIX: unanswerable categories have no recall/precision/mrr data — default to None
+    # FIX: unanswerable categories have no recall/precision/mrr data - default to None
     # (previously incorrectly defaulted to 1.0, inflating category averages)
     for cat in cat_latencies:
         cat_rec = sum(cat_recalls[cat]) / max(1, len(cat_recalls[cat])) if cat_recalls[cat] else None
@@ -376,7 +376,7 @@ def run_benchmark(
 def print_report(rep: BenchmarkReport, mode_label: str = "adaptive") -> None:
     """Print clean, structured benchmark results table."""
     print("-" * 75)
-    print(f"Production-oriented Adaptive RAG — Benchmark Evaluation Report [Mode: {mode_label.upper()}]")
+    print(f"Production-oriented Adaptive RAG - Benchmark Evaluation Report [Mode: {mode_label.upper()}]")
     print("-" * 75)
     print(f"Total Test Cases      : {rep.total_cases}")
     print(f"MRR (Mean Reciprocal) : {rep.mrr:.4f}")
@@ -429,7 +429,7 @@ def print_report(rep: BenchmarkReport, mode_label: str = "adaptive") -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Production-oriented Adaptive RAG — Benchmark Runner")
+    parser = argparse.ArgumentParser(description="Production-oriented Adaptive RAG - Benchmark Runner")
     parser.add_argument(
         "--mode",
         choices=["fast", "balanced", "deep", "adaptive"],

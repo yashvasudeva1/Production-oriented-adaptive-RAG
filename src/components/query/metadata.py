@@ -139,9 +139,9 @@ class AdaptiveQueryMetadataExtractor:
         Conservative rule-based extraction.
 
         Each extracted field is annotated with a confidence level:
-          "high"   — the user explicitly requested a document-scoped filter
-          "medium" — likely a filter but not certain
-          "low"    — heuristic mention; should NOT be applied as a hard filter
+          "high"   - the user explicitly requested a document-scoped filter
+          "medium" - likely a filter but not certain
+          "low"    - heuristic mention; should NOT be applied as a hard filter
 
         The QueryPlanner is responsible for honouring only HIGH-confidence
         fields as hard Qdrant/BM25 filters.
@@ -175,7 +175,7 @@ class AdaptiveQueryMetadataExtractor:
             confidence["document_type"] = "medium"
         elif "paper" in q:
             # "paper" alone inside a content question is NOT a type filter
-            # e.g. "What did the paper say about attention?" — keep as topic only
+            # e.g. "What did the paper say about attention?" - keep as topic only
             confidence["document_type"] = "low"
         elif ("report" in q or "financial report" in q) and any(
             kw in q for kw in ("show", "find", "retrieve")
@@ -192,7 +192,7 @@ class AdaptiveQueryMetadataExtractor:
                 confidence["dates"] = "high"
             else:
                 # Year appears as context (e.g. "the 2017 Transformer paper")
-                # — treat as soft retrieval hint only
+                # - treat as soft retrieval hint only
                 confidence["dates"] = "low"
 
         # ── Organizations ──────────────────────────────────────────────────
@@ -216,7 +216,7 @@ class AdaptiveQueryMetadataExtractor:
             if "organizations" not in confidence:
                 confidence["organizations"] = "low"
 
-        # ── Topics (soft signals only — never hard filters) ────────────────
+        # ── Topics (soft signals only - never hard filters) ────────────────
         match = re.search(r"\b(?:about|regarding|on)\s+([a-zA-Z0-9\s\-]+)", query, re.IGNORECASE)
         if match:
             topic = match.group(1).strip()

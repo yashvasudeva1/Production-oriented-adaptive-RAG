@@ -195,7 +195,7 @@ In offline evaluation or zero-cost execution (`OFFLINE_EVAL=1`), generation rout
 
 All metrics below were measured on the actual codebase (chunking, Qdrant HNSW, BM25, cross-encoder, planning, and evaluation engines) running on commodity CPU.
 
-### 1. Full Production Benchmark Report (110 Cases) — Mode: ADAPTIVE
+### 1. Full Production Benchmark Report (110 Cases) - Mode: ADAPTIVE
 
 > [!NOTE]
 > **Latency Scope Clarification**:
@@ -204,7 +204,7 @@ All metrics below were measured on the actual codebase (chunking, Qdrant HNSW, B
 
 ```text
 ---------------------------------------------------------------------------
-Nexus RAG — Standardized Benchmark Report [Mode: ADAPTIVE]
+Nexus RAG - Standardized Benchmark Report [Mode: ADAPTIVE]
 ---------------------------------------------------------------------------
 Total Test Cases      : 110
 MRR (Mean Reciprocal) : 0.7890
@@ -254,7 +254,7 @@ Latency Distribution (Full Execution on Commodity CPU):
 
 ---
 
-### 2. Held-Out Unseen Test Set (66 Cases) — RAGAS Framework Comparison
+### 2. Held-Out Unseen Test Set (66 Cases) - RAGAS Framework Comparison
 
 Evaluated across the strictly held-out 66-query test split (`scripts/run_standardized_benchmark.py --split test` and `src.evaluation.ragas_eval`):
 
@@ -440,9 +440,9 @@ curl -X POST http://localhost:8000/query/stream \
 ```
 
 **Stream Event Flow:**
-1. `event: retrieval` — Emits candidate sources, confidence score (e.g. `0.94`), and selected route.
-2. `event: delta` — Progressively streams token chunks as they are generated.
-3. `event: done` — Delivers final latency breakdown, verified citations, and complete metadata.
+1. `event: retrieval` - Emits candidate sources, confidence score (e.g. `0.94`), and selected route.
+2. `event: delta` - Progressively streams token chunks as they are generated.
+3. `event: done` - Delivers final latency breakdown, verified citations, and complete metadata.
 
 ---
 
@@ -510,4 +510,4 @@ Services provisioned:
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

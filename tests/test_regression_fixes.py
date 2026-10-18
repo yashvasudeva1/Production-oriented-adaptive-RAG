@@ -169,7 +169,7 @@ class TestMetadataExtractorConfidence:
 
 
 # ---------------------------------------------------------------------------
-# 2. Pareto frontier correctness (pure function tests — no heavy deps)
+# 2. Pareto frontier correctness (pure function tests - no heavy deps)
 # ---------------------------------------------------------------------------
 
 class TestParetoFrontier:
@@ -188,7 +188,7 @@ class TestParetoFrontier:
         """
         BUG FIX: strictly_better previously omitted mean_latency_ms.
         A config identical on recall/mrr/p50 but strictly better on mean
-        must now dominate — it didn't before the fix.
+        must now dominate - it didn't before the fix.
         """
         cfgs = {
             "fast_mean": self._cfg(0.9, 0.9, 5.0, 3.0),
@@ -298,7 +298,7 @@ class TestNDCG:
         assert abs(result - expected) < 1e-4, f"Expected {expected:.4f}, got {result:.4f}"
 
     def test_k_larger_than_list(self):
-        """When k > len(scores), it should not crash — truncates to available."""
+        """When k > len(scores), it should not crash - truncates to available."""
         result = _ndcg([1.0, 0.0], k=10)
         assert 0.0 <= result <= 1.0
 
@@ -309,7 +309,7 @@ class TestNDCG:
 
 class TestRetrievalFilterUnit:
     """
-    Unit-tests for RetrievalFilter.matches_chunk() — in-memory BM25 filter path.
+    Unit-tests for RetrievalFilter.matches_chunk() - in-memory BM25 filter path.
     Loads filters.py directly to avoid the full qdrant_client import chain.
     """
 
@@ -372,7 +372,7 @@ class TestRetrievalFilterUnit:
         # With stubs, just verify it doesn't crash and returns something
         try:
             result = rf.to_qdrant_filter()
-            # Either a real Filter object or a MagicMock — just not None
+            # Either a real Filter object or a MagicMock - just not None
             assert result is not None or True  # lenient assertion with stubs
         except Exception:
             pass  # ok if qdrant stubs break the conversion

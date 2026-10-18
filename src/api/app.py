@@ -220,7 +220,7 @@ async def query_stream(request: QueryRequest) -> StreamingResponse:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 res = await loop.run_in_executor(pool, _run_query)
 
-            # Event 1: Retrieval metadata — emitted before token streaming starts
+            # Event 1: Retrieval metadata - emitted before token streaming starts
             retrieval_event = {
                 "event": "retrieval",
                 "confidence": res.confidence,
@@ -236,14 +236,14 @@ async def query_stream(request: QueryRequest) -> StreamingResponse:
             }
             yield f"data: {json.dumps(retrieval_event)}\n\n"
 
-            # Event 2: Delta tokens — stream the answer text in 6-character word-group chunks
+            # Event 2: Delta tokens - stream the answer text in 6-character word-group chunks
             answer = res.answer or ""
             chunk_size = 6
             for i in range(0, len(answer), chunk_size):
                 yield f"data: {json.dumps({'event': 'delta', 'text': answer[i: i + chunk_size]})}\n\n"
                 await asyncio.sleep(0)  # Yield to flush without blocking
 
-            # Event 3: Done — full structured payload
+            # Event 3: Done - full structured payload
             sources_out = [
                 {
                     "citation_id": s.get("citation_id", 0),

@@ -1,14 +1,14 @@
-# ResearchLens — Adaptive RAG frontend
+# ResearchLens - Adaptive RAG frontend
 
 A light, Apple-inspired React interface for the Production-oriented Adaptive RAG project. Built around the repository's FastAPI endpoints and terminology: hybrid dense + BM25 retrieval, adaptive routing, confidence-gated reranking, grounded answers, citations, and evidence inspection.
 
 ## Included
 
-- **Query workspace** — retrieval mode selection, streaming answers, confidence/latency/source summary, source references, and execution trace.
-- **Pipeline metrics** — a dedicated page for routing distribution, recorded benchmark quality, latency distribution, retrieval ablation comparison, and live operational index counts.
-- **Search explorer** — inspect raw passages through `/search` using hybrid, dense, or BM25 retrieval.
-- **Document library** — document list, filters, file upload integration point, and index status.
-- **API setup** — configure a backend base URL without editing the source.
+- **Query workspace** - retrieval mode selection, streaming answers, confidence/latency/source summary, source references, and execution trace.
+- **Pipeline metrics** - a dedicated page for routing distribution, recorded benchmark quality, latency distribution, retrieval ablation comparison, and live operational index counts.
+- **Search explorer** - inspect raw passages through `/search` using hybrid, dense, or BM25 retrieval.
+- **Document library** - document list, filters, file upload integration point, and index status.
+- **API setup** - configure a backend base URL without editing the source.
 - Responsive desktop and mobile layout, keyboard shortcut `⌘K` / `Ctrl+K`, accessible labels, reduced-motion support.
 
 ## Start locally
