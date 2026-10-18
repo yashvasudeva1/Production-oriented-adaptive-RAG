@@ -1,7 +1,7 @@
 # FRAMES Benchmark Evaluation Report
 
 - **Benchmark:** Google FRAMES (Factuality, Retrieval, And reasoning MEasurement Set)
-- **Evaluated At:** 2026-10-15T11:37:38.964093+00:00
+- **Evaluated At:** 2026-10-18T07:09:03.668278+00:00
 - **Total Multi-Hop Test Cases:** 50
 - **Indexed Corpus Chunks:** 550 (across multi-document Wikipedia graph)
 - **Embedding Model:** `Qwen/Qwen3-Embedding-0.6B` (1024-dim, Asymmetric Instruction Prompt)
@@ -14,16 +14,20 @@
 
 | Configuration | Context Recall | Context Precision | Multi-Hop Traversal Rate | Exact Match Rate | Token F1 | Faithfulness | Mean Latency | P50 Latency |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **ADAPTIVE** | 0.8673 | 0.5122 | 98.0% | 38.0% | 0.3032 | 0.7510 | 10435.88 ms | 4269.24 ms |
+| **DENSE** | 0.7093 | 0.8280 | 88.0% | 6.0% | 0.0195 | 0.9415 | 457.53 ms | 455.14 ms |
+| **BM25** | 0.6957 | 0.6487 | 86.0% | 12.0% | 0.0249 | 0.9438 | 32.31 ms | 30.43 ms |
+| **HYBRID** | 0.7410 | 0.7943 | 88.0% | 10.0% | 0.0212 | 0.9449 | 33.76 ms | 34.01 ms |
+| **HYBRID_RERANK** | 0.7533 | 0.8010 | 88.0% | 12.0% | 0.0223 | 0.9439 | 703.82 ms | 642.19 ms |
+| **ADAPTIVE** | 0.9180 | 0.4183 | 100.0% | 12.0% | 0.0203 | 0.9627 | 3514.75 ms | 3648.67 ms |
 
 ## 2. Reasoning Type Breakdown (Adaptive Pipeline)
 
 | Reasoning Category | Cases | Context Recall | Multi-Hop Traversal | Exact Match | Token F1 | P50 Latency |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `Multiple constraints` | 34 | 0.8598 | 97.1% | 32.4% | 0.2346 | 5027.47 ms |
-| `Numerical reasoning` | 25 | 0.9053 | 96.0% | 36.0% | 0.2936 | 4912.08 ms |
-| `Temporal reasoning` | 22 | 0.8735 | 100.0% | 50.0% | 0.3938 | 3799.64 ms |
-| `Tabular reasoning` | 26 | 0.9058 | 100.0% | 23.1% | 0.2192 | 4299.91 ms |
+| `Multiple constraints` | 34 | 0.9113 | 100.0% | 8.8% | 0.0210 | 3648.67 ms |
+| `Numerical reasoning` | 25 | 0.9500 | 100.0% | 4.0% | 0.0105 | 3713.1 ms |
+| `Temporal reasoning` | 22 | 0.9356 | 100.0% | 22.7% | 0.0272 | 3584.86 ms |
+| `Tabular reasoning` | 26 | 0.9455 | 100.0% | 11.5% | 0.0190 | 3664.86 ms |
 
 ## 3. Key Architectural Observations on Multi-Hop Retrieval
 
