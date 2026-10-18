@@ -55,6 +55,7 @@ def reciprocal_rank_fusion(
     candidate_lists: Optional[Sequence[Sequence[Any]]] = None,
     top_n: Optional[int] = None,
     exact_identifiers: Optional[Sequence[str]] = None,
+    inferred_document_ids: Optional[Sequence[str]] = None,
     weights: Optional[Sequence[float]] = None,
     **kwargs: Any,
 ) -> List[UnifiedCandidate]:
@@ -168,6 +169,16 @@ def reciprocal_rank_fusion(
                     bonus = (matched / len(clean_ids)) * (1.0 / (k + 1))
                     scores[cid] += bonus
 
+    # Apply soft preference boost (+0.15 relative RRF boost) for inferred metadata document matches
+    inferred_ids = inferred_document_ids or kwargs.get("inferred_document_ids")
+    if inferred_ids:
+        inferred_set = {str(did).strip().lower() for did in inferred_ids if str(did).strip()}
+        if inferred_set:
+            for cid, item in doc_mapping.items():
+                did = str(getattr(item, "document_id", "") or (item.get("document_id", "") if isinstance(item, dict) else "")).strip().lower()
+                if did in inferred_set:
+                    scores[cid] += 0.15 * (1.0 / (k + 1))
+
     # Efficient serialization loop
     fused_results: List[UnifiedCandidate] = []
     sorted_items = sorted(scores.items(), key=lambda x: x[1], reverse=True)
@@ -205,6 +216,8 @@ def weighted_rrf(
     k: int = 20,
     top_n: int = 20,
     exact_identifiers: Optional[Sequence[str]] = None,
+    inferred_document_ids: Optional[Sequence[str]] = None,
+    **kwargs: Any,
 ) -> List[UnifiedCandidate]:
     """Weighted Reciprocal Rank Fusion delegating to reciprocal_rank_fusion with explicit weights."""
     return reciprocal_rank_fusion(
@@ -212,7 +225,9 @@ def weighted_rrf(
         k=k,
         top_n=top_n,
         exact_identifiers=exact_identifiers,
+        inferred_document_ids=inferred_document_ids,
         weights=weights,
+        **kwargs,
     )
 
 
@@ -305,9 +320,11 @@ def fuse_candidates(
     candidate_lists: Sequence[Sequence[Any]],
     method: str = "rrf",
     weights: Optional[Sequence[float]] = None,
-    k: int = 60,
+    k: int = 20,
     top_n: int = 20,
     exact_identifiers: Optional[Sequence[str]] = None,
+    inferred_document_ids: Optional[Sequence[str]] = None,
+    **kwargs: Any,
 ) -> List[UnifiedCandidate]:
     """Unified dispatcher for multi-strategy candidate rank fusion."""
     norm_method = (method or "rrf").lower().strip()
@@ -325,11 +342,15 @@ def fuse_candidates(
             k=k,
             top_n=top_n,
             exact_identifiers=exact_identifiers,
+            inferred_document_ids=inferred_document_ids,
+            **kwargs,
         )
     return reciprocal_rank_fusion(
         candidate_lists=candidate_lists,
         k=k,
         top_n=top_n,
         exact_identifiers=exact_identifiers,
+        inferred_document_ids=inferred_document_ids,
         weights=weights,
+        **kwargs,
     )

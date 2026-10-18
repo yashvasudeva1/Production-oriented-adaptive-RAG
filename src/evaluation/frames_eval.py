@@ -409,14 +409,14 @@ def evaluate_frames_query(
         d_res = orchestrator.qdrant.search(q_vec, top_k=top_k * 2)
         k_res = orchestrator.bm25.search(sample.prompt, top_k=top_k * 2)
         from ..components.retrieval.fusion import reciprocal_rank_fusion
-        fused = reciprocal_rank_fusion(bm25_results=k_res, dense_results=d_res, k=60, top_n=top_k)
+        fused = reciprocal_rank_fusion(bm25_results=k_res, dense_results=d_res, k=20, top_n=top_k)
         retrieved_chunks = fused
     elif config_name == "hybrid_rerank":
         q_vec = orchestrator.embedder.embed_query(sample.prompt)
         d_res = orchestrator.qdrant.search(q_vec, top_k=top_k * 2)
         k_res = orchestrator.bm25.search(sample.prompt, top_k=top_k * 2)
         from ..components.retrieval.fusion import reciprocal_rank_fusion
-        fused = reciprocal_rank_fusion(bm25_results=k_res, dense_results=d_res, k=60, top_n=top_k * 2)
+        fused = reciprocal_rank_fusion(bm25_results=k_res, dense_results=d_res, k=20, top_n=top_k * 2)
         retrieved_chunks = orchestrator.reranker.rerank(sample.prompt, fused, top_k=top_k, force=True)
     elif config_name == "adaptive":
         rag_resp = orchestrator.query(sample.prompt)

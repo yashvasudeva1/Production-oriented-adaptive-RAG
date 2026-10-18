@@ -86,18 +86,26 @@ class CrossEncoderReranker:
             try:
                 from sentence_transformers import CrossEncoder
                 try:
-                    self._model = CrossEncoder(self.model_name, device=self.device, local_files_only=True)
+                    self._model = CrossEncoder(self.model_name, device=self.device, max_length=384, local_files_only=True)
                 except Exception:
                     if allow_fallback:
                         raise
-                    self._model = CrossEncoder(self.model_name, device=self.device)
-                logger.info(f"Loaded CrossEncoder: {self.model_name}")
+                    self._model = CrossEncoder(self.model_name, device=self.device, max_length=384)
+                if hasattr(self._model, "max_seq_length"):
+                    self._model.max_seq_length = 384
+                if hasattr(self._model, "tokenizer") and hasattr(self._model.tokenizer, "model_max_length"):
+                    self._model.tokenizer.model_max_length = 384
+                logger.info(f"Loaded CrossEncoder: {self.model_name} (max_length=384)")
             except Exception as exc:
                 if self.model_name != "cross-encoder/ms-marco-MiniLM-L-6-v2":
                     try:
                         from sentence_transformers import CrossEncoder
-                        self._model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", device=self.device, local_files_only=True)
-                        logger.info("Fell back to cached ms-marco-MiniLM-L-6-v2")
+                        self._model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", device=self.device, max_length=384, local_files_only=True)
+                        if hasattr(self._model, "max_seq_length"):
+                            self._model.max_seq_length = 384
+                        if hasattr(self._model, "tokenizer") and hasattr(self._model.tokenizer, "model_max_length"):
+                            self._model.tokenizer.model_max_length = 384
+                        logger.info("Fell back to cached ms-marco-MiniLM-L-6-v2 (max_length=384)")
                         return
                     except Exception:
                         pass
@@ -203,6 +211,7 @@ class CrossEncoderReranker:
         query: str,
         candidates: Sequence[UnifiedCandidate | Any],
         top_k: Optional[int] = None,
+        max_candidates: Optional[int] = None,
         force: bool = False,
     ) -> List[RerankerResult]:
         if not candidates:
@@ -222,7 +231,9 @@ class CrossEncoderReranker:
             if cid and cid not in unique_cands:
                 unique_cands[cid] = c
 
-        cand_list = list(unique_cands.values())
+        # Cap candidates: default top_n = 10 for standard rerank, 6 for micro-rerank
+        cand_cap = max_candidates or min(len(unique_cands), 10)
+        cand_list = list(unique_cands.values())[:cand_cap]
         if not cand_list:
             return []
 
@@ -247,7 +258,19 @@ class CrossEncoderReranker:
             self._load_model()
             if self._model and self._model is not False:
                 try:
-                    pred_scores = self._model.predict(missing_pairs)
+                    import torch
+                    # Sort missing pairs by chunk text length to minimize dynamic padding overhead
+                    sorted_order = sorted(range(len(missing_pairs)), key=lambda i: len(missing_pairs[i][1]))
+                    sorted_pairs = [missing_pairs[i] for i in sorted_order]
+                    with torch.inference_mode():
+                        pred_scores_sorted = self._model.predict(
+                            sorted_pairs,
+                            batch_size=min(len(sorted_pairs), 16),
+                            show_progress_bar=False,
+                        )
+                    pred_scores = [0.0] * len(missing_pairs)
+                    for sorted_idx, p_score in zip(sorted_order, pred_scores_sorted):
+                        pred_scores[sorted_idx] = float(p_score)
                 except Exception as exc:
                     logger.error(f"Cross-encoder predict failed: {exc}, using fallback.")
                     pred_scores = [self._fallback_score(query, p[1]) for p in missing_pairs]

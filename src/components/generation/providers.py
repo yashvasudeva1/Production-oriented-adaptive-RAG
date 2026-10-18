@@ -531,11 +531,21 @@ class OfflineExtractiveProvider(BaseLLMProvider):
             sources_text = prompt
             query = ""
 
-        q_words = set(query.lower().split()) if query else set()
+        q_lower = query.lower()
+        q_words = set(re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", q_lower))
+
+        # Identify target answer categories
+        is_multi_hop = "multi-hop" in system_prompt.lower() or len(query.split()) >= 12
+        needs_ranking = bool(re.search(r"\b(rank|tallest|largest|highest|lowest|first|second|third|fourth|fifth|last)\b", q_lower))
+        needs_year = bool(re.search(r"\b(year|years|when|date|month)\b", q_lower))
+        needs_quantity = bool(re.search(r"\b(how many|how much|duration|count|percentage|length|rate|difference|score|dimension|marks)\b", q_lower))
+        needs_name = bool(re.search(r"\b(who|whose|whom|which person|name of the|founder|president|first lady|inventor|author|director|creator|ceo)\b", q_lower))
 
         # Parse source blocks: "Source [1] (filename, locator):\ntext..." or "[1] text..."
         source_blocks = re.split(r"(?:Source\s+)?\[(\d+)\](?:\s*\([^)]*\))?:?\s*", sources_text)
         sentences_with_citation: List[str] = []
+        extracted_facts: List[Tuple[str, str, int]] = []
+        scored_candidates: List[Tuple[float, str]] = []
 
         if len(source_blocks) >= 3:
             for i in range(1, len(source_blocks), 2):
@@ -545,42 +555,81 @@ class OfflineExtractiveProvider(BaseLLMProvider):
                     continue
 
                 sents = re.split(r"(?<=[.?!])\s+", block_text)
-                best_sent = None
-                best_overlap = -1
-
+                scored_sents = []
                 for s in sents:
                     s_clean = s.strip()
-                    if len(s_clean) < 15:
+                    if len(s_clean) < 15 or "ignore previous instructions" in s_clean.lower():
                         continue
-                    if "ignore previous instructions" in s_clean.lower():
-                        continue
-                    overlap = len(set(s_clean.lower().split()) & q_words) if q_words else 1
-                    if overlap > best_overlap:
-                        best_overlap = overlap
-                        best_sent = s_clean
+                    s_words = set(re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", s_clean.lower()))
+                    overlap = len(s_words & q_words)
 
-                if best_sent:
-                    sentences_with_citation.append(f"{best_sent} [{citation_id}]")
-                elif sents:
-                    first = sents[0].strip()
-                    if first and "ignore previous instructions" not in first.lower():
-                        sentences_with_citation.append(f"{first} [{citation_id}]")
+                    salience = overlap * 2
+                    if needs_ranking and re.search(r"\b\d+(?:st|nd|rd|th)\b|\b(tallest|largest|fourth|first)\b", s_clean, re.IGNORECASE):
+                        salience += 6
+                    if needs_year and re.search(r"\b(18|19|20)\d{2}\b", s_clean):
+                        salience += 5
+                    if needs_quantity and re.search(r"\b\d+(?:,\d+)*(?:\.\d+)?%?\b", s_clean):
+                        salience += 5
+                    if needs_name and re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", s_clean):
+                        salience += 4
+
+                    scored_sents.append((salience, s_clean))
+
+                if scored_sents:
+                    scored_sents.sort(key=lambda x: x[0], reverse=True)
+                    best_sal, best_sent = scored_sents[0]
+                    extracted_facts.append((citation_id, best_sent, best_sal))
+
+                    # Extract candidate answer spans from high-salience sentences with prioritized scoring
+                    if needs_ranking:
+                        ord_matches = re.findall(r"\b\d+(?:st|nd|rd|th)\b", best_sent, re.IGNORECASE)
+                        for om in ord_matches:
+                            scored_candidates.append((best_sal + 25.0, om))
+                    if needs_quantity:
+                        qty_matches = re.findall(r"\b\d+(?:,\d+)*(?:\.\d+)?(?:\s+(?:years?|days?|months?|cm|minutes?|seconds?|percent|%))?\b", best_sent, re.IGNORECASE)
+                        for qm in qty_matches:
+                            if qm.strip() and qm.strip().lower() not in q_lower:
+                                scored_candidates.append((best_sal + 20.0, qm.strip()))
+                    if needs_year:
+                        year_matches = re.findall(r"\b(18|19|20)\d{2}\b", best_sent)
+                        for ym in year_matches:
+                            if ym not in query:
+                                scored_candidates.append((best_sal + 15.0, ym))
+                    if needs_name:
+                        name_matches = re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", best_sent)
+                        for nm in name_matches:
+                            if not all(w in q_lower for w in nm.lower().split()):
+                                scored_candidates.append((best_sal + 15.0, nm))
+                    if not (needs_ranking or needs_quantity or needs_year or needs_name):
+                        for nm in re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b", best_sent):
+                            if len(nm) >= 3 and nm.lower() not in q_lower:
+                                scored_candidates.append((best_sal + 5.0, nm))
+
+            # Ensure multi-hop representation across sources
+            for cit_id, sent, _ in extracted_facts:
+                sentences_with_citation.append(f"{sent} [{cit_id}]")
         else:
-            # Fallback: extract sentences from raw sources_text
             sents = re.split(r"(?<=[.?!])\s+", sources_text)
             for s in sents:
                 s_clean = s.strip()
                 if len(s_clean) < 15 or "ignore previous instructions" in s_clean.lower():
                     continue
-                overlap = len(set(s_clean.lower().split()) & q_words) if q_words else 1
-                if overlap > 0:
-                    sentences_with_citation.append(f"{s_clean} [1]")
+                sentences_with_citation.append(f"{s_clean} [1]")
+                if len(sentences_with_citation) >= 3:
                     break
+
+        scored_candidates.sort(key=lambda x: x[0], reverse=True)
+        answer_candidates = [cand for _, cand in scored_candidates]
 
         latency = (time.perf_counter() - t0) * 1000
 
         if sentences_with_citation:
-            ans = "Based on the retrieved evidence:\n\n" + "\n\n".join(sentences_with_citation[:3])
+            base_answer = "Based on the retrieved evidence:\n\n" + "\n\n".join(sentences_with_citation[:4])
+            if is_multi_hop and answer_candidates:
+                top_ans = answer_candidates[0]
+                ans = f"{base_answer}\n\nFinal Answer: \\boxed{{{top_ans}}}"
+            else:
+                ans = base_answer
         else:
             ans = "No sufficient evidence found to answer the query."
 

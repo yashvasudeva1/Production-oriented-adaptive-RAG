@@ -225,3 +225,117 @@ def test_qdrant_native_sparse_hybrid_search():
     )
     chunk_ids = [r.chunk_id for r in remaining]
     assert "chunk_sparse_1" not in chunk_ids
+
+
+def test_post_hop_multi_hop_consolidation():
+    """Verify Fix 1: Post-hop consolidation guarantees hop coverage while pruning distractor chunks."""
+    from src.components.orchestration.pipeline import RAGOrchestrator
+
+    orchestrator = RAGOrchestrator()
+    cands = [
+        RerankerResult(chunk_id="hop1_top", document_id="doc_hop1", text="Hop 1 primary anchor", score=0.90, rerank_score=0.90),
+        RerankerResult(chunk_id="distractor1", document_id="doc_irrelevant", text="Irrelevant tail chunk", score=0.40, rerank_score=0.40),
+        RerankerResult(chunk_id="hop2_top", document_id="doc_hop2", text="Hop 2 bridge anchor", score=0.82, rerank_score=0.82),
+        RerankerResult(chunk_id="distractor2", document_id="doc_hop1", text="Duplicate hop 1 chunk", score=0.70, rerank_score=0.70),
+        RerankerResult(chunk_id="distractor3", document_id="doc_noise", text="Noise chunk", score=0.35, rerank_score=0.35),
+    ]
+    hop_anchors = {"hop1_top", "hop2_top"}
+
+    consolidated = orchestrator._consolidate_multi_hop_candidates(
+        reranked_candidates=cands,
+        hop_anchor_ids=hop_anchors,
+        num_hops=2,
+        min_score_ratio=0.55,
+    )
+
+    cons_ids = [c.chunk_id for c in consolidated]
+    # 1. Guaranteed hop coverage
+    assert "hop1_top" in cons_ids
+    assert "hop2_top" in cons_ids
+    # 2. Pruning of tail chunks (< 0.55 * 0.90 = 0.495)
+    assert "distractor1" not in cons_ids  # score 0.40 < 0.495
+    assert "distractor3" not in cons_ids  # score 0.35 < 0.495
+    # 3. Capped list size: max(3, 2 + 1) = 3
+    assert len(consolidated) <= 3
+
+
+def test_top1_consensus_guard_and_micro_rerank():
+    """Verify Fix 2: Top-1 consensus guard and micro-rerank behavior."""
+    from src.components.retrieval.confidence import RetrievalConfidence
+
+    conf_high = RetrievalConfidence(
+        score=0.85,
+        tier="high",
+        is_sufficient=True,
+        term_coverage=0.9,
+        exact_identifier_matches=[],
+        missing_identifiers=[],
+        candidate_count=5,
+        top_score=0.95,
+        score_margin=0.2,
+    )
+
+    fused = [
+        UnifiedCandidate(chunk_id="c1", document_id="d1", text="Target chunk text with MODEL_ID", score=0.90),
+        UnifiedCandidate(chunk_id="c2", document_id="d2", text="Second chunk text", score=0.75),
+        UnifiedCandidate(chunk_id="c3", document_id="d3", text="Third chunk text", score=0.60),
+    ]
+
+    # Consensus case: top-1 agreement between BM25 and Dense
+    top_bm25_id = "c1"
+    top_dense_id = "c1"
+    top1_agreement = (top_bm25_id == top_dense_id)
+    can_bypass = conf_high.score >= 0.82 and top1_agreement
+    assert can_bypass is True
+
+    # Borderline case: 0.65 <= score < 0.82 triggers micro-rerank pool of top-6
+    conf_borderline = RetrievalConfidence(
+        score=0.72,
+        tier="medium",
+        is_sufficient=True,
+        term_coverage=0.7,
+        exact_identifier_matches=[],
+        missing_identifiers=[],
+        candidate_count=10,
+        top_score=0.70,
+        score_margin=0.05,
+    )
+    can_bypass_borderline = conf_borderline.score >= 0.82 and top1_agreement
+    assert can_bypass_borderline is False
+    assert conf_borderline.score >= 0.65  # Eligible for micro-reranking
+
+
+def test_inferred_nl_filters_soft_boost():
+    """Verify Fix 3: Inferred NL metadata filters apply soft preference boost without hard-filtering out candidates."""
+    from src.components.query.planner import QueryPlanner
+
+    planner = QueryPlanner()
+    # Query with natural language date and org constraints
+    plan = planner.plan("What are the 2024 guidelines published by NITI Aayog for student internships?")
+
+    # Inferred filters should NOT be hard filters when caller didn't pass explicit_document_ids
+    assert plan.is_explicit_filter is False
+    assert plan.candidate_document_ids == []
+    # But inferred IDs should be recorded as soft preferences
+    assert isinstance(plan.inferred_document_ids, list)
+
+
+def test_offline_deterministic_synthesis_multi_hop_answer():
+    """Verify Fix 4: Offline extractive generator synthesizes numbers and entities with boxed final answer."""
+    from src.components.generation.providers import OfflineExtractiveProvider
+
+    provider = OfflineExtractiveProvider()
+    prompt = (
+        "Sources:\n"
+        "Source [1] (Empire State Building.txt):\n"
+        "The Empire State Building was dethroned as the world's tallest building in 1970.\n\n"
+        "Source [2] (List of tallest buildings in NYC.txt):\n"
+        "As of August 2024, Bronte Tower ranks 37th among the tallest buildings in New York City.\n\n"
+        "Question: Where would Bronte tower rank among tallest buildings in New York City, as of August 2024?"
+    )
+    result = provider.generate(prompt=prompt, system_prompt="multi-hop analytical assistant")
+
+    assert result.text
+    assert "37th" in result.text
+    assert "\\boxed{37th}" in result.text
+

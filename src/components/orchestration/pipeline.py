@@ -216,6 +216,51 @@ class RAGOrchestrator:
             cache_mgr.set_retrieval(query=query, filter_repr=filt_key, top_k=top_k, mode="dense", results=results)
         return results
 
+    def _consolidate_multi_hop_candidates(
+        self,
+        reranked_candidates: List[RerankerResult],
+        hop_anchor_ids: Set[str],
+        num_hops: int = 1,
+        min_score_ratio: float = 0.55,
+        target_top_k: int = 3,
+    ) -> List[RerankerResult]:
+        """
+        Post-Hop Global Consolidation & Pruning:
+        1. Guarantees Hop Coverage Preservation: locks in top-1 bridge chunk from each hop.
+        2. Drops tail chunks scoring < min_score_ratio (0.55) of top-1 score unless it's a hop anchor.
+        3. Deduplicates and caps final context list to max(target_top_k, num_hops + 1) chunks.
+        """
+        if not reranked_candidates:
+            return []
+
+        top_score = max((r.score for r in reranked_candidates), default=1.0)
+        score_threshold = top_score * min_score_ratio
+
+        # Separate anchor chunks and valid candidate chunks
+        anchors = [r for r in reranked_candidates if r.chunk_id in hop_anchor_ids]
+        non_anchors = [
+            r for r in reranked_candidates
+            if r.chunk_id not in hop_anchor_ids and r.score >= score_threshold
+        ]
+
+        max_final_chunks = max(target_top_k, num_hops + 1)
+
+        # Deduplicate and merge anchors with top-scoring non-anchors up to max_final_chunks
+        seen_chunk_ids = {r.chunk_id for r in anchors}
+        combined = list(anchors)
+        for r in non_anchors:
+            if len(combined) >= max_final_chunks:
+                break
+            if r.chunk_id not in seen_chunk_ids:
+                seen_chunk_ids.add(r.chunk_id)
+                combined.append(r)
+
+        combined.sort(key=lambda r: r.score, reverse=True)
+        for rank, r in enumerate(combined, start=1):
+            r.rank = rank
+
+        return combined
+
     def query(
         self,
         query: str,
@@ -234,11 +279,18 @@ class RAGOrchestrator:
         )
         latencies["planning_ms"] = (time.perf_counter() - t_plan) * 1000
 
-        c_doc_ids = (
-            (plan.candidate_document_ids or document_ids)
-            if getattr(self.config, "metadata_filter_enabled", True)
-            else document_ids
-        )
+        # Separate Explicit API Filters from Inferred NL Filters
+        if document_ids:
+            c_doc_ids = document_ids
+            is_explicit = True
+        elif plan.is_explicit_filter and plan.explicit_document_ids:
+            c_doc_ids = plan.explicit_document_ids
+            is_explicit = True
+        else:
+            c_doc_ids = None
+            is_explicit = False
+
+        inferred_doc_ids = plan.inferred_document_ids or []
         active_mode = plan.execution_mode
         cascade_stages: List[str] = []
         escalation_reason: Optional[str] = None
@@ -268,7 +320,7 @@ class RAGOrchestrator:
         # STAGE 1: FAST ROUTE (BM25 lexical matching in < 1ms)
         # -----------------------------------------------------------------
         conf: Optional[RetrievalConfidence] = None
-        m_filter = plan.retrieval_filter if getattr(self.config, "metadata_filter_enabled", True) else None
+        m_filter = plan.retrieval_filter if (is_explicit and getattr(self.config, "metadata_filter_enabled", True)) else None
 
         if active_mode == "fast":
             cascade_stages.append("fast_bm25")
@@ -280,6 +332,20 @@ class RAGOrchestrator:
                 plan.retrieval_signals,
                 metadata_filter=m_filter,
             )
+            # Zero/Low-Hit Fallback: if hard filter produced < top_k candidates, relax to full search
+            if c_doc_ids and len(kw_hits) < plan.top_k_keyword:
+                kw_relaxed = self._search_keyword(
+                    plan.normalized_query,
+                    None,
+                    plan.top_k_keyword,
+                    plan.retrieval_signals,
+                    metadata_filter=None,
+                )
+                seen_ids = {k.chunk_id for k in kw_hits}
+                for rk in kw_relaxed:
+                    if rk.chunk_id not in seen_ids:
+                        kw_hits.append(rk)
+                        seen_ids.add(rk.chunk_id)
             lat_fast = (time.perf_counter() - t_ret) * 1000
             latencies["bm25_ms"] = lat_fast
             latencies["fast_retrieval_ms"] = lat_fast
@@ -372,7 +438,7 @@ class RAGOrchestrator:
             latencies["dense_ms"] = lat_hybrid * 0.7
             latencies["bm25_ms"] = lat_hybrid * 0.3
 
-            # Additive fusion with exact match protection
+            # Additive fusion with exact match protection and inferred metadata soft boost
             t_fuse = time.perf_counter()
             fused = fuse_candidates(
                 all_candidate_runs,
@@ -380,6 +446,7 @@ class RAGOrchestrator:
                 k=20,
                 top_n=max(15, plan.top_k * 2),
                 exact_identifiers=exact_ids,
+                inferred_document_ids=inferred_doc_ids,
             )
             latencies["fusion_ms"] = (time.perf_counter() - t_fuse) * 1000
             fused_count = len(fused)
@@ -394,29 +461,55 @@ class RAGOrchestrator:
             )
             latencies["confidence_ms"] = (time.perf_counter() - t_c) * 1000
 
-            # Conditional reranking: bypass if confidence is high, rerank top candidates if ambiguous
+            # Conditional reranking: Top-1 Consensus Guard for Fast-Path Bypass
+            # Only allow full Cross-Encoder bypass (Confidence >= 0.82) when:
+            # 1) Confidence >= 0.82 AND
+            # 2) Either rank_BM25(d1) == rank_Dense(d1) == 1 OR exact identifier in d1 and zero other top-5 candidates.
+            # For borderline band (0.65 <= Confidence < 0.82): run Tiered Micro-Rerank on Top-6 fused candidates.
             t_rerank = time.perf_counter()
+            top_bm25_id = kw_hits[0].chunk_id if kw_hits else None
+            top_dense_id = dense_hits[0].chunk_id if dense_hits else None
+            top1_agreement = (top_bm25_id is not None and top_bm25_id == top_dense_id)
+
+            has_unique_exact_id = False
+            if exact_ids and fused:
+                d1_text = getattr(fused[0], "text", "").lower()
+                for eid in exact_ids:
+                    eid_lower = eid.lower()
+                    if eid_lower in d1_text:
+                        in_others = any(eid_lower in getattr(c, "text", "").lower() for c in fused[1:5])
+                        if not in_others:
+                            has_unique_exact_id = True
+                            break
+
+            can_full_bypass = (
+                conf.score >= 0.82
+                and (top1_agreement or has_unique_exact_id)
+            )
+
             if mode == "hybrid_rerank":
                 should_rerank = True
+                rerank_pool = fused
             elif mode == "hybrid":
                 should_rerank = False
+                rerank_pool = fused
+            elif can_full_bypass:
+                should_rerank = False
+                rerank_pool = fused
             else:
-                should_rerank = (
-                    active_mode == "hybrid_rerank"
-                    or (
-                        plan.requires_reranking
-                        and self.reranker.should_rerank(
-                            query_type=plan.query_type,
-                            execution_mode="balanced",
-                            candidates=fused,
-                            confidence=conf,
-                        )
-                    )
-                )
+                should_rerank = True
+                # Tiered Micro-Rerank for Borderline Band (0.65 <= conf.score < 0.82)
+                if conf.score >= 0.65:
+                    rerank_pool = fused[:6]
+                else:
+                    rerank_pool = fused[:10]
 
             if should_rerank:
                 reranked = self.reranker.rerank(
-                    query=plan.normalized_query, candidates=fused, top_k=plan.rerank_top_k
+                    query=plan.normalized_query,
+                    candidates=rerank_pool,
+                    top_k=plan.rerank_top_k,
+                    max_candidates=len(rerank_pool),
                 )
                 did_rerank = True
             else:
@@ -485,6 +578,13 @@ class RAGOrchestrator:
             cascade_stages.append("deep_expansion")
             t_ret = time.perf_counter()
 
+            hop_anchor_chunk_ids: Set[str] = set()
+            if all_candidate_runs and all_candidate_runs[0]:
+                top_c = all_candidate_runs[0][0]
+                cid = getattr(top_c, "chunk_id", None) or (top_c.get("chunk_id") if isinstance(top_c, dict) else None)
+                if cid:
+                    hop_anchor_chunk_ids.add(str(cid))
+
             sub_queries = plan.sub_queries or [plan.normalized_query]
             if len(sub_queries) > 1:
                 did_decompose = True
@@ -501,6 +601,7 @@ class RAGOrchestrator:
                 if base_kw:
                     all_candidate_runs.append(base_kw)
                     keyword_count += len(base_kw)
+                    hop_anchor_chunk_ids.add(str(base_kw[0].chunk_id))
 
             # Sub-query searches: run per-sub-query RRF fusion + relevance threshold.
             # Prevents irrelevant sub-query chunks from polluting the global context.
@@ -529,12 +630,15 @@ class RAGOrchestrator:
                             all_candidate_runs.append(filtered_sub)
                             dense_count += len([c for c in filtered_sub if c.dense_score is not None])
                             keyword_count += len([c for c in filtered_sub if c.keyword_score is not None])
+                            hop_anchor_chunk_ids.add(str(filtered_sub[0].chunk_id))
                 elif sub_dense:
                     all_candidate_runs.append(sub_dense)
                     dense_count += len(sub_dense)
+                    hop_anchor_chunk_ids.add(str(sub_dense[0].chunk_id))
                 elif sub_kw:
                     all_candidate_runs.append(sub_kw)
                     keyword_count += len(sub_kw)
+                    hop_anchor_chunk_ids.add(str(sub_kw[0].chunk_id))
 
             # Multi-query perspective expansion for vocabulary coverage
             if plan.requires_multi_query:
@@ -594,6 +698,7 @@ class RAGOrchestrator:
                     if parsed_supp:
                         all_candidate_runs.append(parsed_supp)
                         dense_count += len(parsed_supp)
+                        hop_anchor_chunk_ids.add(str(parsed_supp[0].chunk_id))
                     bridge_queries_used = hop_meta.get("bridge_queries", [])
                     iterative_hops = hop_meta.get("hop_count", 1)
             latencies["iterative_hop_ms"] = (time.perf_counter() - t_iter) * 1000
@@ -608,6 +713,7 @@ class RAGOrchestrator:
                 k=20,
                 top_n=plan.top_k * 2,
                 exact_identifiers=exact_ids,
+                inferred_document_ids=inferred_doc_ids,
             )
             latencies["fusion_ms"] = (time.perf_counter() - t_fuse) * 1000
             fused_count = len(deep_fused)
@@ -626,9 +732,23 @@ class RAGOrchestrator:
             reranked = self.reranker.rerank(
                 query=plan.normalized_query,
                 candidates=deep_fused,
-                top_k=plan.rerank_top_k or 8,
+                top_k=max(15, len(deep_fused)),
+                max_candidates=len(deep_fused),
             )
             did_rerank = True
+
+            # Post-Hop Global Consolidation & Pruning:
+            # 1. Locks in top-1 bridge chunk from each hop (Hop Coverage Preservation).
+            # 2. Prunes tail chunks with score < 0.55 * top_1 unless they are a hop anchor.
+            # 3. Deduplicates and caps final context list to max(target_top_k, num_hops + 1).
+            if hop_anchor_chunk_ids:
+                reranked = self._consolidate_multi_hop_candidates(
+                    reranked_candidates=reranked,
+                    hop_anchor_ids=hop_anchor_chunk_ids,
+                    num_hops=max(1, len(hop_anchor_chunk_ids)),
+                    min_score_ratio=0.55,
+                    target_top_k=plan.top_k or 5,
+                )
             latencies["reranking_ms"] = (time.perf_counter() - t_rerank) * 1000
             reranked_count = len(reranked)
 

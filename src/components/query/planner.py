@@ -78,8 +78,11 @@ class QueryPlanner:
         else:
             mode = signals.initial_route
 
-        # Fast path bypasses heavy metadata filtering & decomposition
-        candidate_ids: List[str] = list(explicit_document_ids or [])
+        # Explicit API filters vs Inferred NL filters
+        explicit_ids: List[str] = list(explicit_document_ids or [])
+        is_explicit = bool(explicit_ids)
+        candidate_ids: List[str] = list(explicit_ids)
+        inferred_candidate_ids: List[str] = []
         retrieval_signals: Dict[str, Any] = {
             "signals": signals,
             "exact_identifiers": signals.exact_identifiers,
@@ -90,8 +93,8 @@ class QueryPlanner:
         from ..retrieval.filters import RetrievalFilter, FilterCondition
 
         retrieval_filter = RetrievalFilter()
-        if candidate_ids:
-            retrieval_filter.document_ids = list(candidate_ids)
+        if explicit_ids:
+            retrieval_filter.document_ids = list(explicit_ids)
 
         # Run metadata extraction and build canonical hard/soft filters
         if self.metadata_extractor:
@@ -175,10 +178,8 @@ class QueryPlanner:
             if signals.quoted_phrases:
                 retrieval_filter.retrieval_hints.quoted_phrases.extend(signals.quoted_phrases)
 
-            # Legacy metadata filter compatibility for backward-compatible tests.
-            # Only used when there are actual hard filters already decided above
-            # AND explicit candidate IDs haven't been provided from elsewhere.
-            if mode in ("balanced", "deep") and self.metadata_filter and not candidate_ids:
+            # Inferred NL filter extraction: convert to soft preferences rather than hard masks
+            if mode in ("balanced", "deep") and self.metadata_filter and not explicit_ids:
                 if not retrieval_filter.is_empty() and retrieval_filter.hard_filters:
                     try:
                         qm = QueryMetadata(
@@ -196,11 +197,10 @@ class QueryPlanner:
                                 resolved_cands.append(did)
                                 if did in _DOC_ID_ALIASES:
                                     resolved_cands.append(_DOC_ID_ALIASES[did])
-                            candidate_ids = list(set(resolved_cands))
-                            retrieval_filter.document_ids = candidate_ids
+                            inferred_candidate_ids = list(set(resolved_cands))
                         retrieval_signals.update(filter_res.retrieval_signals)
                     except Exception as exc:
-                        logger.warning(f"Legacy metadata filter fallback skipped: {exc}")
+                        logger.warning(f"Inferred metadata filter extraction skipped: {exc}")
 
         # Sub-query decomposition for deep mode
         sub_queries: List[str] = []
@@ -270,7 +270,10 @@ class QueryPlanner:
             execution_mode=mode,
             answerability="supported",
             sub_queries=sub_queries if req_decomposition else [],
-            candidate_document_ids=candidate_ids,
+            candidate_document_ids=explicit_ids,
+            explicit_document_ids=explicit_ids,
+            inferred_document_ids=inferred_candidate_ids,
+            is_explicit_filter=is_explicit,
             metadata_filters=extracted_meta,
             retrieval_filter=retrieval_filter,
             retrieval_signals=retrieval_signals,

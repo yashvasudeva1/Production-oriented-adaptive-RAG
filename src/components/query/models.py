@@ -33,6 +33,9 @@ class QueryPlan(BaseModel):
 
     sub_queries: List[str] = Field(default_factory=list)
     candidate_document_ids: List[str] = Field(default_factory=list)
+    explicit_document_ids: List[str] = Field(default_factory=list)
+    inferred_document_ids: List[str] = Field(default_factory=list)
+    is_explicit_filter: bool = False
     metadata_filters: Dict[str, Any] = Field(default_factory=dict)
     retrieval_filter: Optional[Any] = None
     retrieval_signals: Dict[str, Any] = Field(default_factory=dict)
