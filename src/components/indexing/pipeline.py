@@ -130,6 +130,25 @@ class IndexingPipeline:
                 chunk_texts = [c.text for c in chunks]
                 embeddings = self.embedder.embed_texts(chunk_texts)
 
+                # Cache vectors to disk to enable instant sub-second app restarts
+                try:
+                    import numpy as np
+                    from pathlib import Path
+                    dim = getattr(self.embedder, "dimension", len(embeddings[0]) if embeddings else 384)
+                    cache_file = Path(__file__).resolve().parents[3] / "metadata" / f"chunk_embeddings_{dim}.npz"
+                    cache_dict = {}
+                    if cache_file.exists():
+                        try:
+                            c_data = np.load(cache_file)
+                            cache_dict = {k: c_data[k] for k in c_data.files}
+                        except Exception:
+                            pass
+                    for c, v in zip(chunks, embeddings):
+                        cache_dict[c.chunk_id] = np.array(v, dtype=np.float32)
+                    np.savez_compressed(cache_file, **cache_dict)
+                except Exception as _c_exc:
+                    logger.debug(f"Vector disk caching skipped: {_c_exc}")
+
                 # Keep vector index and keyword index synchronized
                 self.qdrant.upsert_chunks(chunks, embeddings)
                 self.bm25.upsert_chunks(chunks)

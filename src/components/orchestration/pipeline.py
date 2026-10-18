@@ -119,7 +119,28 @@ class RAGOrchestrator:
             logger.info("Synchronizing in-memory Qdrant with indexed BM25 chunks...")
             from ..chunking.models import Chunk
             loaded = [Chunk.from_dict(c) for c in self.bm25._all_chunks]
-            vecs = self.embedder.embed_texts([c.text for c in loaded])
+            # Fast disk cache for vectors to achieve sub-second startup
+            import numpy as np
+            from pathlib import Path
+            cache_file = Path(__file__).resolve().parents[3] / "metadata" / f"chunk_embeddings_{self.embedder.dimension}.npz"
+            cached_dict = {}
+            if cache_file.exists():
+                try:
+                    data = np.load(cache_file)
+                    cached_dict = {k: data[k] for k in data.files}
+                except Exception as c_exc:
+                    logger.debug(f"Could not load vector cache {cache_file}: {c_exc}")
+            missing = [c for c in loaded if c.chunk_id not in cached_dict]
+            if missing:
+                new_vecs = self.embedder.embed_texts([c.text for c in missing])
+                for c, v in zip(missing, new_vecs):
+                    cached_dict[c.chunk_id] = np.array(v, dtype=np.float32)
+                try:
+                    np.savez_compressed(cache_file, **cached_dict)
+                    logger.info(f"Saved {len(cached_dict)} precomputed chunk vectors to {cache_file.name}")
+                except Exception as s_exc:
+                    logger.debug(f"Could not save vector cache: {s_exc}")
+            vecs = [cached_dict[c.chunk_id].tolist() for c in loaded]
             self.qdrant.upsert_chunks(loaded, vecs)
 
         self.dense_retriever = DenseRetriever(
