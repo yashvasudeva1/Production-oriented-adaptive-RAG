@@ -105,7 +105,7 @@ def fetch_wikipedia_articles(titles: List[str], cache_path: str = FRAMES_CORPUS_
             req = urllib.request.Request(
                 url,
                 headers={
-                    "User-Agent": "ResearchLensRAG/1.0 (https://github.com/example/researchlens; researchlens@example.com) Python-urllib"
+                    "User-Agent": "NexusRAG/1.0 (https://github.com/example/nexus-rag; nexus@example.com) Python-urllib"
                 },
             )
             for attempt in range(4):

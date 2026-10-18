@@ -63,7 +63,7 @@ class QdrantIndexer:
 
     def __init__(
         self,
-        collection_name: str = "researchlens_chunks",
+        collection_name: str = "nexus_chunks",
         url: Optional[str] = None,
         path: Optional[str] = None,
         api_key: Optional[str] = None,

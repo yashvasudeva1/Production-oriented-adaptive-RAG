@@ -26,7 +26,7 @@ class AppConfig:
     )
     qdrant_url: str = field(default_factory=lambda: os.getenv("QDRANT_URL", ""))
     qdrant_collection: str = field(
-        default_factory=lambda: os.getenv("QDRANT_COLLECTION", "researchlens_chunks")
+        default_factory=lambda: os.getenv("QDRANT_COLLECTION", "nexus_chunks")
     )
     qdrant_distance: str = field(
         default_factory=lambda: os.getenv("QDRANT_DISTANCE", "Dot")

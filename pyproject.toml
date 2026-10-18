@@ -1,7 +1,7 @@
 [project]
-name = "production-rag"
-version = "0.1.0"
-description = "Add your description here"
+name = "nexus-rag"
+version = "1.2.0"
+description = "Nexus: Production-Grade Adaptive, Filter-Aware, Hybrid, Confidence-Gated RAG Platform"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []

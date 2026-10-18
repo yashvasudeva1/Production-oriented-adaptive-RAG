@@ -23,6 +23,13 @@ def test_api_health_and_ready():
     assert "qdrant_points_count" in r_metrics.json()
 
 
+def test_api_root_serves_frontend():
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers.get("content-type", "")
+    assert "Nexus" in r.text
+
+
 def test_api_list_documents():
     r = client.get("/documents")
     assert r.status_code == 200

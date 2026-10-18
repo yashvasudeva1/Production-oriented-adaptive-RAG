@@ -2,14 +2,18 @@
 __pycache__/
 *.py[oc]
 build/
-dist/
+/dist/
 wheels/
 *.egg-info
+!frontend/dist/
 
 # Virtual environments
 venv
 
 .env
+
+node_modules/
+frontend/node_modules/
 
 /documents
 /metadata

@@ -1,5 +1,5 @@
 """
-ResearchLens ingestion component test suite.
+Nexus ingestion component test suite.
 
 Project layout expected:
 
@@ -53,7 +53,7 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
 # CLI
 
 parser = argparse.ArgumentParser(
-    description="ResearchLens ingestion component test suite"
+    description="Nexus ingestion component test suite"
 )
 parser.add_argument(
     "--keep-fixtures",
@@ -183,7 +183,7 @@ def create_fixtures(root: Path) -> dict[str, Path]:
     # Plain text
     p = root / "sample.txt"
     p.write_text(
-        "ResearchLens ingestion test.\n"
+        "Nexus ingestion test.\n"
         "This is a plain text document.\n"
         "It contains multiple lines.\n",
         encoding="utf-8",
@@ -193,7 +193,7 @@ def create_fixtures(root: Path) -> dict[str, Path]:
     # Markdown
     p = root / "sample.md"
     p.write_text(
-        "# ResearchLens\n\n"
+        "# Nexus\n\n"
         "## Architecture\n\n"
         "This is a **Markdown** document.\n\n"
         "- Dense retrieval\n"
@@ -223,7 +223,7 @@ def create_fixtures(root: Path) -> dict[str, Path]:
     p.write_text(
         json.dumps(
             {
-                "project": "ResearchLens",
+                "project": "Nexus",
                 "version": 1,
                 "features": ["RAG", "reranking"],
             },
@@ -247,7 +247,7 @@ def create_fixtures(root: Path) -> dict[str, Path]:
     p.write_text(
         '<?xml version="1.0"?>'
         "<root>"
-        "<title>ResearchLens</title>"
+        "<title>Nexus</title>"
         "<item><name>RAG</name></item>"
         "</root>",
         encoding="utf-8",
@@ -256,7 +256,7 @@ def create_fixtures(root: Path) -> dict[str, Path]:
 
     p = root / "sample.yaml"
     p.write_text(
-        "project: ResearchLens\n"
+        "project: Nexus\n"
         "version: 1\n"
         "features:\n"
         "  - ingestion\n"
@@ -290,7 +290,7 @@ def create_fixtures(root: Path) -> dict[str, Path]:
         """<!doctype html>
 <html>
 <head>
-    <title>ResearchLens Test</title>
+    <title>Nexus Test</title>
     <style>body { font-family: sans-serif; }</style>
 </head>
 <body>
@@ -321,11 +321,11 @@ def create_fixtures(root: Path) -> dict[str, Path]:
     p.write_text(
         """From: sender@example.com
 To: receiver@example.com
-Subject: ResearchLens ingestion test
+Subject: Nexus ingestion test
 Date: Tue, 17 Sep 2026 10:00:00 +0530
 Content-Type: text/plain; charset="utf-8"
 
-Hello from the ResearchLens ingestion test.
+Hello from the Nexus ingestion test.
 """,
         encoding="utf-8",
     )
@@ -340,7 +340,7 @@ Hello from the ResearchLens ingestion test.
         p = root / "sample.docx"
 
         doc = WordDocument()
-        doc.add_heading("ResearchLens", level=1)
+        doc.add_heading("Nexus", level=1)
         doc.add_heading("Architecture", level=2)
         doc.add_paragraph("This is a DOCX paragraph.")
 
@@ -365,7 +365,7 @@ Hello from the ResearchLens ingestion test.
         prs = Presentation()
 
         slide = prs.slides.add_slide(prs.slide_layouts[5])
-        slide.shapes.title.text = "ResearchLens"
+        slide.shapes.title.text = "Nexus"
 
         textbox = slide.shapes.add_textbox(
             Inches(1),
@@ -406,7 +406,7 @@ Hello from the ResearchLens ingestion test.
         p = root / "sample.odt"
 
         odt = OpenDocumentText()
-        odt.text.addElement(P(text="ResearchLens"))
+        odt.text.addElement(P(text="Nexus"))
         odt.text.addElement(P(text="ODT ingestion test."))
         odt.save(str(p))
 
@@ -424,7 +424,7 @@ Hello from the ResearchLens ingestion test.
         page = pdf.new_page()
         page.insert_text(
             (72, 72),
-            "ResearchLens PDF ingestion test.",
+            "Nexus PDF ingestion test.",
         )
         page.insert_text(
             (72, 100),
@@ -450,7 +450,7 @@ Hello from the ResearchLens ingestion test.
         # on default font rendering.
         draw.text(
             (60, 180),
-            "RESEARCHLENS OCR TEST",
+            "NEXUS OCR TEST",
             fill="black",
         )
 
@@ -766,7 +766,7 @@ def test_html_structure(files: dict[str, Path]) -> None:
 
     joined = document.text.lower()
 
-    assert "researchlens" in joined
+    assert "nexus" in joined
     assert "qdrant" in joined
 
     # Script/style content should have been removed.
@@ -808,7 +808,7 @@ def test_image_ocr(files: dict[str, Path]) -> None:
         document.text.lower(),
     )
 
-    assert "researchlens" in normalized, (
+    assert "nexus" in normalized, (
         f"OCR did not detect expected text: {document.text!r}"
     )
 
@@ -827,8 +827,8 @@ def test_archive(files: dict[str, Path]) -> None:
 
     joined = document.text.lower()
 
-    assert "researchlens ingestion test" in joined
-    assert '"project": "researchlens"' in joined
+    assert "nexus ingestion test" in joined
+    assert '"project": "nexus"' in joined
 
 
 def test_batch_deduplication(
@@ -983,7 +983,7 @@ def test_media_actual() -> None:
 
 def main() -> int:
     print("-" * 72)
-    print("ResearchLens — Ingestion Component Test Suite")
+    print("Nexus — Ingestion Component Test Suite")
     print(f"Project root:     {PROJECT_ROOT}")
     print(f"Ingestion import: {INGESTION_PACKAGE}")
     print("-" * 72)

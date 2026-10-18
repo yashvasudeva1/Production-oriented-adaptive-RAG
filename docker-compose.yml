@@ -3,7 +3,7 @@ version: "3.8"
 services:
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: researchlens_qdrant
+    container_name: nexus_qdrant
     restart: unless-stopped
     ports:
       - "6333:6333"
@@ -20,7 +20,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: researchlens_api
+    container_name: nexus_api
     restart: unless-stopped
     ports:
       - "8000:8000"

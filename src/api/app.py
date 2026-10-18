@@ -46,9 +46,9 @@ DOCUMENTS_DIR = Path(__file__).resolve().parents[2] / "documents"
 DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
-    title="Production-oriented Adaptive RAG API",
-    description="Production-Grade, Modular, Evidence-Grounded RAG Platform",
-    version="1.1.0",
+    title="Nexus RAG API",
+    description="Nexus: Production-Grade, Adaptive, Evidence-Grounded RAG Platform",
+    version="1.2.0",
 )
 
 app.add_middleware(
@@ -59,10 +59,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+FRONTEND_DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+if FRONTEND_DIST_DIR.exists():
+    assets_dir = FRONTEND_DIST_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def index():
+        return FileResponse(FRONTEND_DIST_DIR / "index.html")
+elif STATIC_DIR.exists():
     @app.get("/", include_in_schema=False)
     def index():
         return FileResponse(STATIC_DIR / "index.html")
