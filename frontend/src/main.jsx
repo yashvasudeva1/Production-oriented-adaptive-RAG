@@ -7,7 +7,7 @@ import {
   Menu, MessageSquareText, MoreHorizontal, Network, PanelLeftClose, Plus,
   RefreshCw, Search, Send, Settings2, ShieldCheck, SlidersHorizontal,
   Sparkles, X, Zap, CircleAlert, BarChart3, Command, Upload, ExternalLink,
-  GitBranch, HardDrive, Server, SearchCheck, Workflow, FileSearch
+  GitBranch, HardDrive, Server, SearchCheck, Workflow, FileSearch, Trash2, Download
 } from 'lucide-react';
 
 function GithubIcon({ size = 16, className = '' }) {
@@ -80,6 +80,42 @@ function App() {
   const [docsLoading,setDocsLoading] = useState(false);
   const [showLibrary,setShowLibrary] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
+  const [settingsTab,setSettingsTab] = useState('telemetry');
+  const [queryHistory,setQueryHistory] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nexus_query_history');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [
+      {
+        id: 'sample-1',
+        time: 'Recent',
+        query: 'How many attention heads does the base model use?',
+        mode: 'adaptive',
+        route: 'fast',
+        query_type: 'fact',
+        confidence: 0.65,
+        abstained: false,
+        latency_ms: 24.5,
+        sources: [
+          { citation_id: 1, chunk_id: 'chk_b4186bd0e50776d7', filename: '1706.03762v7.pdf', page: 9, section: 'Model Variations', snippet: 'In Table 3 rows (A), we vary the number of attention heads...' },
+          { citation_id: 2, chunk_id: 'chk_8b20a8b1516452ec', filename: '1706.03762v7.pdf', page: 5, section: '3.2.2 Multi-Head Attention', snippet: 'In this work we employ h = 8 parallel attention layers, or heads. For each of these we use dk = dv = dmodel/h = 64.' }
+        ],
+        retrieval: {
+          execution_mode: 'fast',
+          cascade_stages_executed: ['fast_bm25'],
+          latency_breakdown_ms: { planning_ms: 0.8, fast_retrieval_ms: 6.2, confidence_ms: 0.9, rerank_ms: 0.0, generation_ms: 16.6 },
+          confidence_signals: { term_coverage: 0.67, agreement_ratio: 0.0, score_margin: 0.28, id_ratio: 0.0 }
+        },
+        answer: 'The base model uses 8 attention heads. [2]'
+      }
+    ];
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('nexus_query_history', JSON.stringify(queryHistory.slice(0, 100)));
+    } catch {}
+  }, [queryHistory]);
   const [apiBase,setApiBase] = useState(API_BASE_DEFAULT);
   const [apiDraft,setApiDraft] = useState(API_BASE_DEFAULT);
   const [connectionChecked,setConnectionChecked] = useState(false);
@@ -146,7 +182,26 @@ function App() {
         for(const eventChunk of events){const line=eventChunk.split('\n').find(l=>l.startsWith('data: '));if(!line)continue;let data;try{data=JSON.parse(line.slice(6))}catch{continue}
           if(data.event==='retrieval'){current={...current,confidence:data.confidence,execution_mode:data.execution_mode,query_type:data.query_type,retrieval:{...(current.retrieval||{}),latency_retrieval_ms:data.latency_retrieval_ms}};}
           else if(data.event==='delta'){current={...current,answer:current.answer+(data.text||'')};}
-          else if(data.event==='done'){current={...current,...data};}
+          else if(data.event==='done'){
+            current={...current,...data};
+            const rec = {
+              id: `tr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+              query: prompt,
+              mode,
+              route: (data.retrieval?.execution_mode || data.execution_mode || current.execution_mode || mode),
+              query_type: (data.retrieval?.query_type || data.query_type || 'fact'),
+              confidence: data.confidence ?? current.confidence,
+              abstained: Boolean(data.abstained),
+              abstention_reason: data.abstention_reason,
+              latency_ms: data.latency_ms,
+              sources: data.sources || [],
+              retrieval: data.retrieval || {},
+              citation_validation: data.citation_validation,
+              answer: data.answer || current.answer || '',
+            };
+            setQueryHistory(prev => [rec, ...prev.filter(r => r.id !== rec.id)]);
+          }
           else if(data.event==='error'){throw new Error(data.detail||'Query failed');}
           if(runId===runCounter.current)setAnswer({...current});
         }
@@ -200,10 +255,340 @@ function App() {
       </div>
       <footer className="app-footer"><span>Nexus <span className="footer-dot">·</span> Adaptive retrieval, grounded answers</span><span><span className={`status-dot ${isLive?'online':'offline'}`}/>{isLive?'Connected to backend':'Demo data · Not connected'}</span></footer>
     </main>
-    {showSettings&&<div className="modal-scrim" onMouseDown={e=>e.target===e.currentTarget&&setShowSettings(false)}><section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div className="modal-header"><div><div className="eyebrow">CONFIGURATION</div><h2 id="settings-title">API connection</h2></div><IconButton label="Close settings" onClick={()=>setShowSettings(false)}><X size={18}/></IconButton></div><p className="modal-intro">Connect this interface to your running FastAPI service. For local development, the default Vite proxy is not configured: enter your backend origin and enable CORS or add a proxy in <code>vite.config.js</code>.</p><form onSubmit={saveApiSettings}><label className="field-label" htmlFor="api-url">Backend base URL</label><input className="text-input" id="api-url" placeholder="http://localhost:8000" value={apiDraft} onChange={e=>setApiDraft(e.target.value)}/><div className="field-hint">Leave blank to use the built-in preview. The UI expects endpoints such as <code>/health</code>, <code>/metrics</code>, and <code>/query/stream</code>.</div><div className="modal-actions"><button type="button" className="button button-secondary" onClick={()=>{setApiDraft('');setApiBase('');setShowSettings(false);setConnectionChecked(false);setNotice('Switched to preview mode.')}}>Use preview</button><button type="submit" className="button button-primary">Save & connect<ArrowRight size={15}/></button></div></form><div className="settings-divider"/><div className="setup-links"><a href={`${apiDraft.replace(/\/$/,'')||'http://localhost:8000'}/docs`} target="_blank" rel="noreferrer"><FileText size={15}/>Open API docs <ExternalLink size={12}/></a><a href={REPO_URL} target="_blank" rel="noreferrer"><GithubIcon size={15}/>Repository <ExternalLink size={12}/></a></div></section></div>}
+    <SettingsModal
+      showSettings={showSettings}
+      setShowSettings={setShowSettings}
+      settingsTab={settingsTab}
+      setSettingsTab={setSettingsTab}
+      queryHistory={queryHistory}
+      setQueryHistory={setQueryHistory}
+      apiDraft={apiDraft}
+      setApiDraft={setApiDraft}
+      saveApiSettings={saveApiSettings}
+      setApiBase={setApiBase}
+      setConnectionChecked={setConnectionChecked}
+      setNotice={setNotice}
+    />
     {showLibrary&&<div className="modal-scrim" onMouseDown={e=>e.target===e.currentTarget&&setShowLibrary(false)}><section className="settings-modal library-modal" role="dialog" aria-modal="true"><div className="modal-header"><div><div className="eyebrow">KNOWLEDGE BASE</div><h2>Document library</h2></div><IconButton label="Close library" onClick={()=>setShowLibrary(false)}><X size={18}/></IconButton></div><LibraryPage docs={docs} setDocs={setDocs} totalDocs={totalDocs} totalChunks={totalChunks} isLive={isLive} fileRef={fileRef} uploadFiles={uploadFiles} uploadBusy={uploadBusy} selectedDoc={selectedDoc} setSelectedDoc={setSelectedDoc} apiBase={apiBase}/></section></div>}
     {notice&&<div className="toast" role="status"><CheckCircle2 size={16}/><span>{notice}</span><button className="plain-icon" aria-label="Dismiss notification" onClick={()=>setNotice('')}><X size={14}/></button></div>}
   </div>;
+}
+
+function SettingsModal({
+  showSettings, setShowSettings, settingsTab, setSettingsTab,
+  queryHistory, setQueryHistory, apiDraft, setApiDraft, saveApiSettings, setApiBase, setConnectionChecked, setNotice
+}) {
+  const [selectedRecord, setSelectedRecord] = useState(queryHistory[0] || null);
+  const [filter, setFilter] = useState('All');
+
+  // Keep selected record valid when history updates
+  useEffect(() => {
+    if (!selectedRecord && queryHistory.length > 0) {
+      setSelectedRecord(queryHistory[0]);
+    }
+  }, [queryHistory]);
+
+  const filteredHistory = useMemo(() => {
+    return queryHistory.filter(item => {
+      if (filter === 'All') return true;
+      if (filter === 'Abstained') return item.abstained;
+      return (item.route || item.mode || '').toLowerCase() === filter.toLowerCase();
+    });
+  }, [queryHistory, filter]);
+
+  const totalQueries = queryHistory.length;
+  const avgLatency = totalQueries ? (queryHistory.reduce((acc, q) => acc + (q.latency_ms || 0), 0) / totalQueries) : 0;
+  const avgChunks = totalQueries ? (queryHistory.reduce((acc, q) => acc + (q.sources?.length || 0), 0) / totalQueries) : 0;
+  const fastShare = totalQueries ? ((queryHistory.filter(q => (q.route || '').toLowerCase() === 'fast').length / totalQueries) * 100) : 0;
+
+  function clearHistory() {
+    setQueryHistory([]);
+    setSelectedRecord(null);
+  }
+
+  function exportHistory() {
+    const blob = new Blob([JSON.stringify(queryHistory, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `nexus-query-telemetry-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  if (!showSettings) return null;
+
+  return (
+    <div className="modal-scrim" onMouseDown={e => e.target === e.currentTarget && setShowSettings(false)}>
+      <section className={`settings-modal ${settingsTab === 'telemetry' ? 'telemetry-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div className="settings-tabs-header">
+          <div className="settings-tab-nav">
+            <button
+              type="button"
+              className={`settings-tab-btn ${settingsTab === 'telemetry' ? 'active' : ''}`}
+              onClick={() => setSettingsTab('telemetry')}
+            >
+              <Activity size={15} />
+              <span>Query Monitor & Telemetry</span>
+              <span className="tab-badge">{queryHistory.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`settings-tab-btn ${settingsTab === 'api' ? 'active' : ''}`}
+              onClick={() => setSettingsTab('api')}
+            >
+              <Server size={15} />
+              <span>API Connection</span>
+            </button>
+          </div>
+          <IconButton label="Close settings" onClick={() => setShowSettings(false)}>
+            <X size={18} />
+          </IconButton>
+        </div>
+
+        {settingsTab === 'api' ? (
+          <div>
+            <div className="modal-header">
+              <div>
+                <div className="eyebrow">CONFIGURATION</div>
+                <h2 id="settings-title">API connection</h2>
+              </div>
+            </div>
+            <p className="modal-intro">
+              Connect this interface to your running FastAPI service. For local development, the default Vite proxy is not configured: enter your backend origin and enable CORS or add a proxy in <code>vite.config.js</code>.
+            </p>
+            <form onSubmit={saveApiSettings}>
+              <label className="field-label" htmlFor="api-url">Backend base URL</label>
+              <input
+                className="text-input"
+                id="api-url"
+                placeholder="http://localhost:8000"
+                value={apiDraft}
+                onChange={e => setApiDraft(e.target.value)}
+              />
+              <div className="field-hint">
+                Leave blank to use the built-in preview. The UI expects endpoints such as <code>/health</code>, <code>/metrics</code>, and <code>/query/stream</code>.
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={() => {
+                    setApiDraft('');
+                    setApiBase('');
+                    setShowSettings(false);
+                    setConnectionChecked(false);
+                    setNotice('Switched to preview mode.');
+                  }}
+                >
+                  Use preview
+                </button>
+                <button type="submit" className="button button-primary">
+                  Save & connect<ArrowRight size={15} />
+                </button>
+              </div>
+            </form>
+            <div className="settings-divider" />
+            <div className="setup-links">
+              <a href={`${apiDraft.replace(/\/$/, '') || 'http://localhost:8000'}/docs`} target="_blank" rel="noreferrer">
+                <FileText size={15} />Open API docs <ExternalLink size={12} />
+              </a>
+              <a href={REPO_URL} target="_blank" rel="noreferrer">
+                <GithubIcon size={15} />Repository <ExternalLink size={12} />
+              </a>
+            </div>
+          </div>
+        ) : (
+          <div className="telemetry-content">
+            <div className="telemetry-kpi-grid">
+              <div className="telemetry-kpi-card">
+                <span className="telemetry-kpi-label">Queries Logged</span>
+                <span className="telemetry-kpi-val">{totalQueries}</span>
+                <span className="telemetry-kpi-sub">Tracked in session</span>
+              </div>
+              <div className="telemetry-kpi-card">
+                <span className="telemetry-kpi-label">Avg Latency</span>
+                <span className="telemetry-kpi-val">{fmt(avgLatency, 0)} <small>ms</small></span>
+                <span className="telemetry-kpi-sub">End-to-end total</span>
+              </div>
+              <div className="telemetry-kpi-card">
+                <span className="telemetry-kpi-label">Avg Chunks</span>
+                <span className="telemetry-kpi-val">{fmt(avgChunks, 1)}</span>
+                <span className="telemetry-kpi-sub">Passages fetched / query</span>
+              </div>
+              <div className="telemetry-kpi-card">
+                <span className="telemetry-kpi-label">Fast Path Share</span>
+                <span className="telemetry-kpi-val">{fmt(fastShare, 1)}%</span>
+                <span className="telemetry-kpi-sub">BM25 fast route</span>
+              </div>
+            </div>
+
+            <div className="telemetry-toolbar">
+              <div className="telemetry-filters">
+                {['All', 'Fast', 'Balanced', 'Deep', 'Abstained'].map(f => (
+                  <button
+                    key={f}
+                    type="button"
+                    className={`telemetry-filter-btn ${filter === f ? 'active' : ''}`}
+                    onClick={() => setFilter(f)}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="button button-secondary button-small"
+                  onClick={exportHistory}
+                  disabled={!queryHistory.length}
+                >
+                  <Download size={13} /> Export JSON
+                </button>
+                <button
+                  type="button"
+                  className="button button-secondary button-small"
+                  onClick={clearHistory}
+                  disabled={!queryHistory.length}
+                >
+                  <Trash2 size={13} /> Clear
+                </button>
+              </div>
+            </div>
+
+            <div className="telemetry-table-container">
+              <table className="telemetry-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Query</th>
+                    <th>Route</th>
+                    <th>Latency</th>
+                    <th>Chunks</th>
+                    <th>Conf</th>
+                    <th>Verdict</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredHistory.length > 0 ? (
+                    filteredHistory.map(row => (
+                      <tr
+                        key={row.id}
+                        className={selectedRecord?.id === row.id ? 'selected' : ''}
+                        onClick={() => setSelectedRecord(row)}
+                      >
+                        <td style={{ whiteSpace: 'nowrap', color: '#888' }}>{row.time || '-'}</td>
+                        <td style={{ fontWeight: 600, maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {row.query}
+                        </td>
+                        <td>
+                          <span className={`mode-badge ${(row.route || row.mode || 'adaptive').toLowerCase()}`}>
+                            {(row.route || row.mode || 'adaptive').toUpperCase()}
+                          </span>
+                        </td>
+                        <td style={{ fontFamily: 'monospace' }}>{fmt(row.latency_ms, 1)} ms</td>
+                        <td>{row.sources?.length ?? 0}</td>
+                        <td style={{ fontFamily: 'monospace' }}>{row.confidence != null ? fmt(row.confidence, 2) : '-'}</td>
+                        <td>
+                          <Tag tone={row.abstained ? 'amber' : 'green'} dot>
+                            {row.abstained ? 'Abstained' : 'Grounded'}
+                          </Tag>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="7" style={{ textAlign: 'center', padding: '24px', color: '#999' }}>
+                        No query traces match this filter. Run a query in Workspace to see live telemetry!
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {selectedRecord && (
+              <div className="telemetry-detail-view">
+                <div className="detail-header">
+                  <div>
+                    <span className="eyebrow">QUERY INSPECTOR</span>
+                    <h3 style={{ margin: '4px 0', fontSize: '13px' }}>"{selectedRecord.query}"</h3>
+                    <p style={{ margin: 0, fontSize: '10px', color: '#777' }}>
+                      Route: <b>{(selectedRecord.route || selectedRecord.mode || 'adaptive').toUpperCase()}</b> · Intent: <b>{selectedRecord.query_type || 'fact'}</b> · Gate: <b>{selectedRecord.abstained ? 'Abstained' : 'Passed'}</b>
+                      {selectedRecord.abstention_reason && ` (${selectedRecord.abstention_reason})`}
+                    </p>
+                  </div>
+                  <Tag tone={selectedRecord.abstained ? 'amber' : 'green'} dot>
+                    {selectedRecord.abstained ? 'ABSTAINED' : 'EVIDENCE GROUNDED'}
+                  </Tag>
+                </div>
+
+                <div>
+                  <span className="stat-label" style={{ marginBottom: '6px', display: 'block' }}>STAGE LATENCY BREAKDOWN (MS)</span>
+                  <div className="detail-timing-grid">
+                    <div className="detail-timing-box">
+                      <span className="timing-name">Query Planning</span>
+                      <span className="timing-val">{fmt(selectedRecord.retrieval?.latency_breakdown_ms?.planning_ms ?? selectedRecord.retrieval?.latency_breakdown_ms?.query_planning_ms, 1)} ms</span>
+                    </div>
+                    <div className="detail-timing-box">
+                      <span className="timing-name">{selectedRecord.route === 'fast' ? 'Fast BM25 Retrieval' : 'Hybrid Retrieval'}</span>
+                      <span className="timing-val">{fmt(selectedRecord.retrieval?.latency_breakdown_ms?.hybrid_retrieval_ms ?? selectedRecord.retrieval?.latency_breakdown_ms?.fast_retrieval_ms, 1)} ms</span>
+                    </div>
+                    <div className="detail-timing-box">
+                      <span className="timing-name">Fusion & Confidence</span>
+                      <span className="timing-val">{fmt(selectedRecord.retrieval?.latency_breakdown_ms?.fusion_ms ?? selectedRecord.retrieval?.latency_breakdown_ms?.confidence_ms, 1)} ms</span>
+                    </div>
+                    <div className="detail-timing-box">
+                      <span className="timing-name">Cross-Encoder Rerank</span>
+                      <span className="timing-val">{fmt(selectedRecord.retrieval?.latency_breakdown_ms?.rerank_ms, 1)} ms</span>
+                    </div>
+                    <div className="detail-timing-box">
+                      <span className="timing-name">Parent Expansion</span>
+                      <span className="timing-val">{fmt(selectedRecord.retrieval?.latency_breakdown_ms?.parent_expansion_ms, 1)} ms</span>
+                    </div>
+                    <div className="detail-timing-box">
+                      <span className="timing-name">Token Generation</span>
+                      <span className="timing-val">{fmt(selectedRecord.retrieval?.latency_breakdown_ms?.generation_ms, 1)} ms</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <span className="stat-label" style={{ marginBottom: '6px', display: 'block' }}>
+                    RETRIEVED CHUNKS & EVIDENCE ({selectedRecord.sources?.length ?? 0} CHUNKS FETCHED)
+                  </span>
+                  <div className="detail-chunks-list">
+                    {selectedRecord.sources?.length ? (
+                      selectedRecord.sources.map((s, idx) => (
+                        <div className="detail-chunk-card" key={s.chunk_id || idx}>
+                          <div className="detail-chunk-top">
+                            <span>[{s.citation_id || idx + 1}] {s.filename || s.document_id || 'Document'}</span>
+                            <span style={{ fontFamily: 'monospace', color: '#1d4ed8' }}>
+                              {s.page ? `Page ${s.page}` : ''} {s.section ? `· ${s.section}` : ''}
+                            </span>
+                          </div>
+                          <p className="detail-chunk-snippet">{s.snippet || 'Snippet not available.'}</p>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: '#888', marginTop: '4px' }}>
+                            <span>Chunk ID: {s.chunk_id || '-'}</span>
+                            {s.score != null && <span>Score: {fmt(s.score, 4)}</span>}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="empty-state small-empty">
+                        <FileSearch size={18} />
+                        <b>No candidate chunks retained</b>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+    </div>
+  );
 }
 
 function WorkspacePage({query,setQuery,mode,setMode,busy,answer,error,runQuery,queryRef,docs,totalDocs,totalChunks,isLive,setPage,setShowLibrary}) {
@@ -223,7 +608,7 @@ function AnswerPanel({answer,isBusy}) {
   const sources=answer.sources||[];const confidence=answer.confidence;const retrieval=answer.retrieval||{};const breakdown=retrieval.latency_breakdown_ms||{};
   const [tab,setTab]=useState('answer');const [copied,setCopied]=useState(false);
   async function copyAnswer(){try{await navigator.clipboard.writeText(answer.answer||'');setCopied(true);setTimeout(()=>setCopied(false),1400)}catch{setCopied(false)}}
-  return <section className="answer-panel page-enter"><div className="answer-panel-top"><div className="answer-label"><span className="answer-spark"><Sparkles size={14}/></span><span><b>Response</b><small>{isBusy?'Generating answer':'Completed response'}</small></span></div><div className="answer-actions"><Tag tone={answer.abstained?'amber':'green'} dot>{answer.abstained?'Abstained':(answer.citation_validation?.valid===false?'Review citations':'Evidence returned')}</Tag><IconButton label="Copy answer" onClick={copyAnswer}>{copied?<Check size={16}/>:<Copy size={16}/>}</IconButton></div></div><div className="answer-stats"><span><span className="stat-label">ROUTE</span><b>{safeText(answer.execution_mode||retrieval.execution_mode,'Adaptive').toUpperCase()}</b></span><span><span className="stat-label">CONFIDENCE</span><b>{confidence==null?'-':fmt(confidence,2)}</b></span><span><span className="stat-label">LATENCY</span><b>{answer.latency_ms==null?'-':`${fmt(answer.latency_ms,0)} ms`}</b></span><span><span className="stat-label">SOURCES</span><b>{sources.length}</b></span></div><div className="answer-tabs"><button className={tab==='answer'?'active':''} onClick={()=>setTab('answer')}>Answer</button><button className={tab==='sources'?'active':''} onClick={()=>setTab('sources')}>Sources <span>{sources.length}</span></button><button className={tab==='trace'?'active':''} onClick={()=>setTab('trace')}>Execution trace</button></div>{tab==='answer'&&<div className="answer-body">{answer.answer?<p className="answer-text">{answer.answer}</p>:<span className="subtle">Waiting for answer tokens…</span>}{answer.abstention_reason&&<div className="abstention-note"><ShieldCheck size={16}/><div><b>Evidence gate abstention</b><p>{answer.abstention_reason}</p></div></div>}{sources.length>0&&<div className="inline-sources"><span>SUPPORTED BY</span>{sources.map((s,i)=><span key={`${s.citation_id}-${i}`} className="inline-source-chip">[{s.citation_id||i+1}] {s.filename||s.document_id||'Source'}</span>)}</div>}</div>}{tab==='sources'&&<div className="answer-body source-detail-list">{sources.length?sources.map((s,i)=><article className="source-detail" key={`${s.chunk_id||s.document_id}-${i}`}><span className="source-number">[{s.citation_id||i+1}]</span><div><b>{s.filename||s.document_id||'Source document'}</b><p>{s.snippet||'Source returned without a preview snippet.'}</p><small>{[s.page&&`Page ${s.page}`,s.section,s.chunk_id&&`Chunk ${s.chunk_id}`].filter(Boolean).join(' · ')||'Retrieved evidence'}</small></div></article>):<div className="empty-state small-empty"><FileSearch size={21}/><b>No source records returned</b><p>The backend did not attach source references to this answer.</p></div>}</div>}{tab==='trace'&&<div className="answer-body"><div className="trace-list">{[['Query planning',breakdown.planning_ms??breakdown.query_planning_ms],['Hybrid retrieval',breakdown.hybrid_retrieval_ms??breakdown.fast_retrieval_ms],['Fusion & confidence',breakdown.fusion_ms??breakdown.confidence_ms],['Reranking',breakdown.rerank_ms],['Parent expansion',breakdown.parent_expansion_ms],['Generation',breakdown.generation_ms]].map(([name,val],i)=><div className="trace-row" key={name}><span className={`trace-dot ${val==null?'muted':''}`}/><span>{name}</span><b>{val==null?'Not reported':`${fmt(val,1)} ms`}</b></div>)}</div><p className="trace-footnote">Stage timings are shown only when the API returns them. Missing values are not inferred.</p></div>}</section>;
+  return <section className="answer-panel page-enter"><div className="answer-panel-top"><div className="answer-label"><span className="answer-spark"><Sparkles size={14}/></span><span><b>Response</b><small>{isBusy?'Generating answer':'Completed response'}</small></span></div><div className="answer-actions"><Tag tone={answer.abstained?'amber':'green'} dot>{answer.abstained?'Abstained':(answer.citation_validation?.valid===false?'Review citations':'Evidence returned')}</Tag><IconButton label="Copy answer" onClick={copyAnswer}>{copied?<Check size={16}/>:<Copy size={16}/>}</IconButton></div></div><div className="answer-stats"><span><span className="stat-label">ROUTE</span><b>{safeText(answer.execution_mode||retrieval.execution_mode,'Adaptive').toUpperCase()}</b></span><span><span className="stat-label">CONFIDENCE</span><b>{confidence==null?'-':fmt(confidence,2)}</b></span><span><span className="stat-label">LATENCY</span><b>{answer.latency_ms==null?'-':`${fmt(answer.latency_ms,0)} ms`}</b></span><span><span className="stat-label">SOURCES</span><b>{sources.length}</b></span></div><div className="answer-tabs"><button className={tab==='answer'?'active':''} onClick={()=>setTab('answer')}>Answer</button><button className={tab==='sources'?'active':''} onClick={()=>setTab('sources')}>Sources <span>{sources.length}</span></button><button className={tab==='trace'?'active':''} onClick={()=>setTab('trace')}>Execution trace</button></div>{tab==='answer'&&<div className="answer-body">{answer.answer?<p className="answer-text">{answer.answer}</p>:<span className="subtle">Waiting for answer tokens…</span>}{answer.abstention_reason&&<div className="abstention-note"><ShieldCheck size={16}/><div><b>Evidence gate abstention</b><p>{answer.abstention_reason}</p></div></div>}{sources.length>0&&<div className="inline-sources"><span>SUPPORTED BY</span>{sources.map((s,i)=><span key={`${s.citation_id}-${i}`} className="inline-source-chip">[{s.citation_id||i+1}] {s.filename||s.document_id||'Source'}</span>)}</div>}</div>}{tab==='sources'&&<div className="answer-body source-detail-list">{sources.length?sources.map((s,i)=><article className="source-detail" key={`${s.chunk_id||s.document_id}-${i}`}><span className="source-number">[{s.citation_id||i+1}]</span><div><b>{s.filename||s.document_id||'Source document'}</b><p>{s.snippet||'Source returned without a preview snippet.'}</p><small>{[s.page&&`Page ${s.page}`,s.section,s.chunk_id&&`Chunk ${s.chunk_id}`].filter(Boolean).join(' · ')||'Retrieved evidence'}</small></div></article>):<div className="empty-state small-empty"><FileSearch size={21}/><b>No source records returned</b><p>The backend did not attach source references to this answer.</p></div>}</div>}{tab==='trace'&&<div className="answer-body"><div className="trace-list">{[['Query planning',breakdown.planning_ms??breakdown.query_planning_ms],[breakdown.hybrid_retrieval_ms!=null?'Hybrid retrieval (BM25 + Dense)':'Fast BM25 retrieval',breakdown.hybrid_retrieval_ms??breakdown.fast_retrieval_ms],['Fusion & confidence',breakdown.fusion_ms??breakdown.confidence_ms],['Reranking',breakdown.rerank_ms],['Parent expansion',breakdown.parent_expansion_ms],['Generation',breakdown.generation_ms]].map(([name,val],i)=><div className="trace-row" key={name}><span className={`trace-dot ${val==null?'muted':''}`}/><span>{name}</span><b>{val==null?'Not reported':`${fmt(val,1)} ms`}</b></div>)}</div><p className="trace-footnote">Stage timings are shown only when the API returns them. Missing values are not inferred.</p></div>}</section>;
 }
 
 function MetricsPage({isLive,health,metrics,refreshOverview}) {

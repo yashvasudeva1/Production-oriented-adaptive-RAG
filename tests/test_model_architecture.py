@@ -265,9 +265,7 @@ def test_system_registry_embedder_routing(monkeypatch):
     from src.components.registry import SystemRegistry
 
     # Reset registry cache
-    with SystemRegistry._lock:
-        SystemRegistry._embedder = None
-        SystemRegistry._config = None
+    SystemRegistry.reset()
 
     # Test Gemini routing
     monkeypatch.setenv("EMBEDDING_MODEL", "models/gemini-embedding-2")
@@ -276,13 +274,14 @@ def test_system_registry_embedder_routing(monkeypatch):
     assert isinstance(gemini_inst, GeminiEmbedder)
 
     # Reset and test SentenceTransformer routing
-    with SystemRegistry._lock:
-        SystemRegistry._embedder = None
-        SystemRegistry._config = None
+    SystemRegistry.reset()
 
     monkeypatch.setenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
     st_inst = SystemRegistry.get_embedder()
     assert isinstance(st_inst, SentenceTransformerEmbedder)
+
+    # Clean up after test
+    SystemRegistry.reset()
 
 
 def test_app_config_embedding_dimension_validation():

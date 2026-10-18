@@ -114,6 +114,14 @@ class RAGOrchestrator:
         self.qdrant = qdrant_indexer or SystemRegistry.get_qdrant()
         self.bm25 = bm25_indexer or SystemRegistry.get_bm25()
 
+        # Synchronize in-memory Qdrant with indexed BM25 chunks if Qdrant is empty
+        if self.qdrant.count() == 0 and self.bm25.count() > 0:
+            logger.info("Synchronizing in-memory Qdrant with indexed BM25 chunks...")
+            from ..chunking.models import Chunk
+            loaded = [Chunk.from_dict(c) for c in self.bm25._all_chunks]
+            vecs = self.embedder.embed_texts([c.text for c in loaded])
+            self.qdrant.upsert_chunks(loaded, vecs)
+
         self.dense_retriever = DenseRetriever(
             indexer=self.qdrant, embedder=self.embedder
         )

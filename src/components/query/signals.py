@@ -37,6 +37,7 @@ class QuerySignals:
     comparison_terms: List[str] = field(default_factory=list)
     is_multi_part: bool = False
     is_multi_hop: bool = False
+    is_quantitative: bool = False
     word_count: int = 0
     clause_count: int = 1
 
@@ -63,13 +64,13 @@ KNOWN_TECHNICAL_IDENTIFIERS: Set[str] = {
 }
 
 
-def extract_query_signals(query: str, normalized_query: str) -> QuerySignals:
+def extract_query_signals(query: str, normalized_query: Optional[str] = None) -> QuerySignals:
     """
     Extract deterministic lexical, structural, and syntactic signals from query text.
     Executes in under 0.2 milliseconds with zero network or model overhead.
     """
     q_raw = query.strip()
-    q_norm = normalized_query.strip()
+    q_norm = (normalized_query if normalized_query is not None else query).strip()
     q_lower = q_norm.lower()
 
     words = q_lower.split()
@@ -129,6 +130,14 @@ def extract_query_signals(query: str, normalized_query: str) -> QuerySignals:
     ]
     is_multi_hop = any(re.search(p, q_lower) for p in multi_hop_patterns)
 
+    # Quantitative count/measurement indicators
+    is_quantitative = bool(
+        re.search(
+            r"\b(?:how many|how much|how often|what percentage|count of|number of|what year|when)\b",
+            q_lower,
+        )
+    )
+
     # Clause count estimate
     clauses = re.split(r"[,;]|\band\b", q_lower)
     clause_count = max(1, len([c for c in clauses if len(c.strip()) > 3]))
@@ -162,8 +171,10 @@ def extract_query_signals(query: str, normalized_query: str) -> QuerySignals:
         complexity = "low"
 
     # 10. Initial route selection for the confidence cascade
-    # Exact/simple queries begin on the ultra-fast BM25 path
-    if (intent in ("fact", "technical_exact") and complexity == "low") or (quoted and word_count <= 6):
+    # Quantitative fact questions without explicit identifiers require dense semantic alignment
+    if is_quantitative and not exact_ids and not quoted:
+        initial_route: InitialRoute = "balanced"
+    elif (intent in ("fact", "technical_exact") and complexity == "low") or (quoted and word_count <= 6):
         initial_route: InitialRoute = "fast"
     elif complexity == "high" or intent in ("comparison", "summary") or is_multi_hop:
         initial_route = "deep"
@@ -184,6 +195,7 @@ def extract_query_signals(query: str, normalized_query: str) -> QuerySignals:
         comparison_terms=comp_matches,
         is_multi_part=is_multi_part,
         is_multi_hop=is_multi_hop,
+        is_quantitative=is_quantitative,
         word_count=word_count,
         clause_count=clause_count,
     )

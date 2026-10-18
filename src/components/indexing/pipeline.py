@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from typing import List, Optional, Sequence
 
@@ -109,6 +110,22 @@ class IndexingPipeline:
                 for c in chunks:
                     if c.chunk_type == "parent":
                         self.doc_store.store_parent_text(c.chunk_id, c.text)
+
+                # Ingest-time chunk deduplication across documents (e.g. arXiv vs NIPS copies of the same paper)
+                existing_hashes = {
+                    hashlib.md5(re.sub(r"\s+", " ", c.get("text", "")).strip().lower().encode()).hexdigest()
+                    for c in getattr(self.bm25, "_all_chunks", [])
+                    if c.get("document_id") != doc.document_id
+                }
+                deduped_chunks = []
+                for c in chunks:
+                    c_hash = hashlib.md5(re.sub(r"\s+", " ", c.text).strip().lower().encode()).hexdigest()
+                    if c_hash in existing_hashes:
+                        logger.info(f"Skipping cross-document duplicate chunk {c.chunk_id} from {doc.filename}")
+                        continue
+                    existing_hashes.add(c_hash)
+                    deduped_chunks.append(c)
+                chunks = deduped_chunks
 
                 chunk_texts = [c.text for c in chunks]
                 embeddings = self.embedder.embed_texts(chunk_texts)

@@ -217,11 +217,11 @@ class QueryPlanner:
             req_multi_query = False
             req_decomposition = False
             req_rerank = False
-            top_k = 6
+            top_k = 10
             top_k_dense = 0
-            top_k_keyword = 6
+            top_k_keyword = 15
             rerank_top_k = 0
-            context_budget = 1200
+            context_budget = 1600
         elif mode in ("deep", "hybrid_rerank"):
             req_dense = True
             req_keyword = True

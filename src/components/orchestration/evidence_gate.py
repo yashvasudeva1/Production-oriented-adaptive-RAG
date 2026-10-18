@@ -142,10 +142,28 @@ class EvidenceGate:
                 supporting_chunks=[],
             )
 
-        # 4. Authentic calibrated confidence score (no artificial max(0.4, ...) floor)
+        # Check that quantitative/count queries contain at least one numeric entity/digit in top chunks
+        is_quant = bool(re.search(r"\b(?:how many|how much|what percentage|count of|number of|what year|when)\b", q_lower))
+        if is_quant:
+            has_numeric_evidence = any(
+                re.search(r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b", c.text.lower())
+                for c in viable_chunks[:3]
+            )
+            if not has_numeric_evidence:
+                return EvidenceVerdict(
+                    allowed=False,
+                    confidence=round(overlap_ratio * 0.2, 2),
+                    reason="The query asks for a quantitative count or measurement, but the retrieved context contains no numeric values or counts.",
+                    supporting_chunks=[],
+                )
+
+        # 4. Authentic calibrated confidence score
         best_score = max((c.rerank_score for c in viable_chunks), default=0.0)
-        if best_score > 1.0 or best_score < 0.0:
-            sig_score = 1.0 / (1.0 + math.exp(-max(-6.0, min(6.0, best_score))))
+        if best_score > 1.0:
+            # Raw BM25 scores (typically 2 to 15) normalized linearly instead of saturating sigmoid
+            sig_score = min(1.0, max(0.0, best_score / 15.0))
+        elif best_score < 0.0:
+            sig_score = 1.0 / (1.0 + math.exp(-max(-6.0, best_score)))
         else:
             sig_score = min(1.0, best_score * 20.0) if best_score < 0.05 else best_score
 

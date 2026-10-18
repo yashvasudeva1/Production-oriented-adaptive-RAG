@@ -190,12 +190,23 @@ class RetrievalConfidenceScorer:
             tier = "low"
 
         # 8. Sufficiency threshold
-        threshold = self.min_coverage_fast if execution_mode == "fast" else self.min_coverage_balanced
-        is_sufficient = (
-            term_cov >= threshold
-            and (not req_ids or len(matched_ids) > 0)
-            and (execution_mode != "fast" or top_score >= self.min_top_score_bm25 or term_cov >= 0.6)
-        )
+        if execution_mode == "fast":
+            if req_ids:
+                is_sufficient = (len(matched_ids) > 0 and term_cov >= self.min_coverage_fast)
+            else:
+                # Without exact identifier verification, single-retriever BM25 must demonstrate
+                # strong lexical alignment and score margin to bypass hybrid retrieval
+                is_sufficient = (
+                    term_cov >= 0.85
+                    and top_score >= self.min_top_score_bm25
+                    and norm_margin >= 0.35
+                )
+        else:
+            threshold = self.min_coverage_balanced
+            is_sufficient = (
+                term_cov >= threshold
+                and (not req_ids or len(matched_ids) > 0)
+            )
 
         reasons = [
             f"Coverage: {term_cov:.1%}",

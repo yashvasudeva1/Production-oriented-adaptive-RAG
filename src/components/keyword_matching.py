@@ -71,6 +71,17 @@ class BM25Config:
     stopwords: set[str] = field(default_factory=set)
 
 
+# Stopwords specifically filtered from query questions to prevent interrogative words
+# (e.g. 'how', 'many', 'much') from receiving artificially high IDF scores and ranking distractors.
+INTERROGATIVE_QUERY_STOPWORDS: set[str] = {
+    "how", "many", "much", "does", "do", "did", "the", "a", "an", "is", "are",
+    "was", "were", "be", "been", "being", "have", "has", "had", "use", "uses",
+    "used", "using", "what", "which", "when", "where", "why", "who", "whom",
+    "can", "could", "would", "should", "of", "in", "to", "for", "on", "with",
+    "at", "by", "from", "about", "tell", "give", "show", "find"
+}
+
+
 # Text processing
 
 def normalize_text(
@@ -504,6 +515,21 @@ class BM25Retriever:
             min_token_length=self.config.min_token_length,
             stopwords=self.config.stopwords,
         )
+
+        # Apply interrogative stopword filtering for queries while preserving technical identifiers
+        # and numbers (e.g. 'h', 'n', '512', 'd_model', 'p_drop')
+        filtered_query_tokens = [
+            t for t in query_tokens
+            if t not in INTERROGATIVE_QUERY_STOPWORDS
+            or len(t) == 1
+            or any(c.isdigit() for c in t)
+            or "_" in t
+            or "-" in t
+        ]
+        if len(filtered_query_tokens) >= 2:
+            query_tokens = filtered_query_tokens
+        elif filtered_query_tokens:
+            query_tokens = filtered_query_tokens
 
         if not query_tokens:
             return BM25RetrievalResponse(

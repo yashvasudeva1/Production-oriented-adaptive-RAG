@@ -4,7 +4,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
 [![Qdrant](https://img.shields.io/badge/Qdrant-Vector%20DB-red.svg)](https://qdrant.tech)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/Tests-122%20Passed-brightgreen.svg)](tests/)
+[![Tests Passing](https://img.shields.io/badge/Tests-126%20Passed-brightgreen.svg)](tests/)
 [![Google FRAMES](https://img.shields.io/badge/Google%20FRAMES-88%25%20Traversal-blueviolet.svg)](FRAMES_EVALUATION_REPORT.md)
 [![RAGAS Evaluated](https://img.shields.io/badge/RAGAS-66%20Held--Out-orange.svg)](RAGAS_EVALUATION_REPORT.md)
 
@@ -20,6 +20,7 @@ Nexus bundles a production-ready, Apple Human Interface Guidelines (HIG)-inspire
 - **Segmented Route Controller**: Seamlessly toggle between `Adaptive`, `Balanced`, `Fast`, and `Deep` execution modes directly from the persistent chrome bar.
 - **Live SSE Progressive Streaming**: The `POST /query/stream` endpoint delivers Server-Sent Events (`retrieval`, `delta`, and `done`), streaming tokens with sub-millisecond initial chunk latency.
 - **Interactive 6-Stage Pipeline Visualizer**: Click through all six architectural stages to inspect mathematical formulations, latency budgets, input/output contracts, and failure-mode recovery mechanisms.
+- **Settings Telemetry & Query Monitor Panel**: Built-in inspector accessible from the top chrome bar providing live telemetry across all queries: stage latencies (Planning, Fast/Hybrid Retrieval, Fusion/Confidence, Cross-Encoder Rerank, Parent Exp, Generation), full candidate chunk provenance, filterable history, and JSON export.
 - **Real-Time Latency Breakdown Drawer**: Displays live per-stage timing: Planning, Dense/Sparse Retrieval, RRF Rank Fusion, Cross-Encoder Micro-Rerank, Late Parent Expansion & Gate, and LLM Synthesis.
 - **Corpus Explorer & Document Library**: Inspect indexed multi-domain documents, trigger pre-configured test prompts, upload new files with instant indexing, and inspect provenance.
 
