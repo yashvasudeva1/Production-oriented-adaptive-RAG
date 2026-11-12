@@ -8,8 +8,12 @@ wheels/
 
 # Virtual environments
 venv
+.venv/
 
 .env
+.pytest_cache/
+node_modules/
+dist/
 
 /documents
 /metadata

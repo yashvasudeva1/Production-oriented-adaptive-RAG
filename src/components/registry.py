@@ -76,7 +76,10 @@ class SystemRegistry:
                     cls._qdrant = QdrantIndexer(
                         collection_name=cfg.qdrant_collection,
                         url=cfg.qdrant_url if cfg.qdrant_url else None,
+                        path=cfg.qdrant_path if (not cfg.qdrant_url and cfg.qdrant_path) else None,
+                        api_key=cfg.qdrant_api_key or None,
                         vector_size=embedder.dimension,
+                        distance=cfg.qdrant_distance,
                     )
         return cls._qdrant
 

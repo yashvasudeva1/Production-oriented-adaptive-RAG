@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: nexus-adaptive-rag-ui
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_BASE
+        value: https://yashvasudeva-adaptive-rag.hf.space
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

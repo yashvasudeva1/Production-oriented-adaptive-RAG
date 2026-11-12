@@ -3,7 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -64,7 +64,7 @@ class RetrievalMetadata(BaseModel):
 
 
 class RAGResponse(BaseModel):
-    """Complete, structured response from the ResearchLens system."""
+    """Complete, structured response from the Nexus system."""
     query: str
     answer: str
     confidence: float
@@ -202,12 +202,12 @@ class RAGOrchestrator:
             cache_mgr.set_retrieval(query=query, filter_repr=filt_key, top_k=top_k, mode="dense", results=results)
         return results
 
-    def query(
+    def _retrieve_and_gate(
         self,
         query: str,
         document_ids: Optional[List[str]] = None,
         mode: Optional[str] = None,
-    ) -> RAGResponse:
+    ) -> Tuple[QueryPlan, RetrievalMetadata, EvidenceVerdict, Dict[str, float], float]:
         start_time = time.perf_counter()
         latencies: Dict[str, float] = {}
 
@@ -547,24 +547,49 @@ class RAGOrchestrator:
             latency_breakdown_ms=latencies,
         )
 
+        return plan, retrieval_meta, verdict, latencies, start_time
+
+    def _abstention_response(
+        self,
+        query: str,
+        plan: QueryPlan,
+        retrieval_meta: RetrievalMetadata,
+        verdict: EvidenceVerdict,
+        latencies: Dict[str, float],
+        start_time: float,
+    ) -> RAGResponse:
+        total_latency = (time.perf_counter() - start_time) * 1000
+        latencies["total_ms"] = total_latency
+        return RAGResponse(
+            query=query,
+            answer=(
+                f"I cannot provide a grounded answer based on the available sources: "
+                f"{verdict.reason}"
+            ),
+            confidence=verdict.confidence,
+            abstained=True,
+            abstention_reason=verdict.reason,
+            query_type=plan.query_type,
+            execution_mode=retrieval_meta.execution_mode,
+            sources=[],
+            retrieval=retrieval_meta,
+            latency_ms=total_latency,
+        )
+
+    def query(
+        self,
+        query: str,
+        document_ids: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+    ) -> RAGResponse:
+        plan, retrieval_meta, verdict, latencies, start_time = self._retrieve_and_gate(
+            query=query, document_ids=document_ids, mode=mode
+        )
+
         # Early abstention if evidence is insufficient
         if not verdict.allowed:
-            total_latency = (time.perf_counter() - start_time) * 1000
-            latencies["total_ms"] = total_latency
-            return RAGResponse(
-                query=query,
-                answer=(
-                    f"I cannot provide a grounded answer based on the available sources: "
-                    f"{verdict.reason}"
-                ),
-                confidence=verdict.confidence,
-                abstained=True,
-                abstention_reason=verdict.reason,
-                query_type=plan.query_type,
-                execution_mode=active_mode,
-                sources=[],
-                retrieval=retrieval_meta,
-                latency_ms=total_latency,
+            return self._abstention_response(
+                query, plan, retrieval_meta, verdict, latencies, start_time
             )
 
         # Answer generation with citation enforcement
@@ -583,9 +608,65 @@ class RAGOrchestrator:
             confidence=verdict.confidence,
             abstained=False,
             query_type=plan.query_type,
-            execution_mode=active_mode,
+            execution_mode=retrieval_meta.execution_mode,
             sources=gen_result["sources"],
             retrieval=retrieval_meta,
             citation_validation=gen_result["validation"],
             latency_ms=total_latency,
         )
+
+    def query_stream(
+        self,
+        query: str,
+        document_ids: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+    ) -> Iterator[Dict[str, Any]]:
+        """Yield SSE-ready stage, delta, and done events for /query/stream."""
+        plan, retrieval_meta, verdict, latencies, start_time = self._retrieve_and_gate(
+            query=query, document_ids=document_ids, mode=mode
+        )
+        retrieval_ms = (time.perf_counter() - start_time) * 1000
+
+        yield {
+            "event": "retrieval",
+            "confidence": verdict.confidence,
+            "execution_mode": retrieval_meta.execution_mode,
+            "query_type": plan.query_type,
+            "latency_retrieval_ms": round(retrieval_ms, 2),
+        }
+
+        if not verdict.allowed:
+            resp = self._abstention_response(
+                query, plan, retrieval_meta, verdict, latencies, start_time
+            )
+            yield {"event": "delta", "text": resp.answer}
+            yield {"event": "done", **resp.model_dump()}
+            return
+
+        t_gen = time.perf_counter()
+        gen_result: Dict[str, Any] = {"answer": "", "sources": [], "validation": {}}
+        for kind, payload in self.generator.generate_stream(
+            query=query, supporting_chunks=verdict.supporting_chunks
+        ):
+            if kind == "delta":
+                yield {"event": "delta", "text": payload}
+            elif kind == "final":
+                gen_result = payload
+
+        latencies["generation_ms"] = (time.perf_counter() - t_gen) * 1000
+        total_latency = (time.perf_counter() - start_time) * 1000
+        latencies["total_ms"] = total_latency
+
+        resp = RAGResponse(
+            query=query,
+            answer=gen_result["answer"],
+            confidence=verdict.confidence,
+            abstained=False,
+            query_type=plan.query_type,
+            execution_mode=retrieval_meta.execution_mode,
+            sources=gen_result["sources"],
+            retrieval=retrieval_meta,
+            citation_validation=gen_result["validation"],
+            latency_ms=total_latency,
+        )
+        yield {"event": "done", **resp.model_dump()}

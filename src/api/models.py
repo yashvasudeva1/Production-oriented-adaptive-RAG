@@ -1,17 +1,32 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Literal, Optional
+from pydantic import BaseModel, Field, field_validator
 
 
 class QueryRequest(BaseModel):
-    query: str = Field(..., description="User question or research query.")
+    query: str = Field(..., min_length=1, max_length=2000, description="User question or research query.")
     document_ids: Optional[List[str]] = Field(
-        default=None, description="Optional list of document IDs to scope search to."
+        default=None, max_length=50, description="Optional list of document IDs to scope search to."
     )
-    mode: Optional[str] = Field(
-        default=None, description="Optional execution mode: fast, balanced, or deep."
+    mode: Optional[Literal["fast", "balanced", "deep", "adaptive"]] = Field(
+        default=None, description="Optional execution mode: adaptive, fast, balanced, or deep."
     )
+
+    @field_validator("query")
+    @classmethod
+    def validate_non_empty_query(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("Query cannot be empty or whitespace.")
+        return cleaned
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def normalize_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return v.strip().lower() if isinstance(v, str) else v
 
 
 class SourceReference(BaseModel):
@@ -40,11 +55,19 @@ class QueryResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    query: str
-    top_k: int = 10
-    document_ids: Optional[List[str]] = None
-    strategy: str = "hybrid"  # dense, keyword, hybrid, parent_child, multi_query
+    query: str = Field(..., min_length=1, max_length=2000)
+    top_k: int = Field(default=10, ge=1, le=50)
+    document_ids: Optional[List[str]] = Field(default=None, max_length=50)
+    strategy: Literal["hybrid", "dense", "keyword"] = "hybrid"
     metadata_filter: Optional[Dict[str, Any]] = None
+
+    @field_validator("query")
+    @classmethod
+    def validate_non_empty_search_query(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("Query cannot be empty or whitespace.")
+        return cleaned
 
 
 class SearchItem(BaseModel):
@@ -99,7 +122,7 @@ class IngestJobResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     qdrant_healthy: bool
     document_count: int
     chunk_count: int

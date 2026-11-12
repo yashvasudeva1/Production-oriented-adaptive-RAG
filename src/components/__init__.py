@@ -1,5 +1,5 @@
 """
-ResearchLens modular components:
+Nexus modular components:
 - Ingestion: Multi-modal document parsing and normalized block extraction.
 - Chunking: Structural, semantic, recursive, and parent-child splitters.
 - Indexing: Vector storage (Qdrant), keyword index (BM25), and document lifecycle store.

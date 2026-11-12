@@ -1,4 +1,4 @@
-# Production-oriented Adaptive RAG: Adaptive, Filter-Aware, Hybrid, Confidence-Gated RAG Platform
+# Nexus — Production-Oriented Adaptive RAG Platform
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
@@ -376,14 +376,77 @@ python -m src.evaluation.ragas_eval --engine deterministic
 
 ## Docker & Deployment
 
-Containerized deployment via Docker Compose:
+### Architecture Overview (Deployment Topology)
+
+```mermaid
+flowchart TD
+    Client["Client / HTML Demo (/demo)"] --> API["FastAPI API (:8000, 1 worker)"]
+    API --> Obs["JSON Logs + Prometheus (/metrics)"]
+    API --> Planner["QueryPlanner (Fast / Balanced / Deep)"]
+    Planner --> Cache["LRU + TTL Cache"]
+    Cache --> BM25["BM25 Indexer (metadata/chunks.json)"]
+    Cache --> Qdrant["Qdrant Vector DB (:6333, Dot)"]
+    BM25 --> RRF["Weighted RRF Fusion"]
+    Qdrant --> RRF
+    RRF --> Gate["Confidence Scorer + Conditional Cross-Encoder"]
+    Gate --> Gen["Grounded Generator (Groq / OpenRouter / Offline SSE)"]
+```
+
+### Local Run
 
 ```bash
-docker-compose up --build -d
+cp .env.example .env
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install --index-url https://download.pytorch.org/whl/cpu torch==2.10.0
+pip install -r requirements-prod.txt
+python main.py
 ```
-Boots:
-1. **Standalone Qdrant Vector DB** at port `6333`.
-2. **Production-oriented Adaptive RAG FastAPI API Server** at port `8000`.
+
+- API docs: `http://127.0.0.1:8000/docs`
+- Minimal HTML demo (SSE streaming): `http://127.0.0.1:8000/demo`
+- Health / Readiness / Prometheus metrics: `/health`, `/ready`, `/metrics`
+
+### Cloud CPU VM Deployment (Vultr / AWS 2 vCPU, 4 GB RAM)
+
+```bash
+# 1. SSH into Ubuntu VM and install Docker + Compose plugin
+ssh ubuntu@<VM_IP>
+sudo apt-get update && sudo apt-get install -y docker.io docker-compose-v2 git
+sudo usermod -aG docker $USER && newgrp docker
+
+# 2. Clone and configure environment (no hardcoded keys)
+git clone https://github.com/yashvasudeva1/Production-oriented-adaptive-RAG.git
+cd Production-oriented-adaptive-RAG
+cp .env.example .env
+# Edit .env: set GROQ_API_KEY (or OFFLINE_EVAL=true), keep TRANSCRIBE_AUDIO_VIDEO=false
+
+# 3. Build and start Qdrant + FastAPI (memory-capped for 4 GB RAM)
+docker compose up --build -d
+
+# 4. Verify readiness, Prometheus metrics, and streaming query
+curl -s http://localhost:8000/health
+curl -s http://localhost:8000/ready
+curl -s http://localhost:8000/metrics | head -n 20
+```
+
+### Load Testing & Cost Estimation
+
+```bash
+# Run headless Locust load test (requires: pip install locust)
+locust -f scripts/locustfile.py --headless -u 5 -r 1 -t 60s --host http://localhost:8000 --csv results/load
+
+# Compute QPS, P50/P95 latency, and $/1k queries (e.g., Vultr 4 GB ~$0.036/hr or AWS t3.medium ~$0.0416/hr)
+python scripts/benchmark_cost.py --url http://127.0.0.1:8000/query --requests 20 --vm-hourly-usd 0.036
+```
+
+### Deployment & Benchmark Summary Table
+
+| Metric / Configuration | Source | P50 Latency | P95 Latency | Quality / Notes |
+|---|---|---|---|---|
+| **Adaptive Production (110 cases)** | Repo CPU benchmark | 556.3 ms | 1212.9 ms | MRR 0.732, Recall@K 0.787, Citation Acc 89.4% |
+| **Conditional Rerank (Ablation G)** | Repo retrieval ablation | 6.0 ms | 9.7 ms | 92.2% mean latency cut vs unconditional rerank |
+| **Warm Cache (Ablation H)** | Repo retrieval ablation | 2.6 ms | 4.7 ms | Zero embedding/reranker recompute on cache hit |
+| **Containerized CPU Budget** | `docker-compose.yml` | — | — | `qdrant` 1 GB + `api` 2.5 GB (1 Uvicorn worker, <=4 GB VM) |
 
 ---
 

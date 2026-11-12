@@ -363,7 +363,7 @@ def run_benchmark(
 def print_report(rep: BenchmarkReport, mode_label: str = "adaptive") -> None:
     """Print clean, structured benchmark results table."""
     print("-" * 75)
-    print(f"ResearchLens — Benchmark Evaluation Report [Mode: {mode_label.upper()}]")
+    print(f"Nexus — Benchmark Evaluation Report [Mode: {mode_label.upper()}]")
     print("-" * 75)
     print(f"Total Test Cases      : {rep.total_cases}")
     print(f"MRR (Mean Reciprocal) : {rep.mrr:.4f}")
@@ -416,7 +416,7 @@ def print_report(rep: BenchmarkReport, mode_label: str = "adaptive") -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ResearchLens — Production Benchmark Runner")
+    parser = argparse.ArgumentParser(description="Nexus — Production Benchmark Runner")
     parser.add_argument(
         "--mode",
         choices=["fast", "balanced", "deep", "adaptive"],

@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, status
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 
 from ..components.chunking import ChunkingPipeline
 from ..components.indexing import (
@@ -24,6 +26,7 @@ from ..components.ingestion.config import IngestionConfig
 from ..components.ingestion.pipeline import IngestionPipeline as DocIngestionPipeline
 from ..components.orchestration import RAGOrchestrator
 from ..components.registry import SystemRegistry
+from .metrics import PrometheusMetrics, configure_json_logging
 from .models import (
     DocumentItem,
     HealthResponse,
@@ -38,24 +41,65 @@ from .models import (
     SourceReference,
 )
 
+load_dotenv()
+cfg = SystemRegistry.get_config()
+configure_json_logging(cfg.log_level)
 logger = logging.getLogger(__name__)
+metrics_registry = PrometheusMetrics()
 
 DOCUMENTS_DIR = Path(__file__).resolve().parents[2] / "documents"
 DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+DEMO_HTML_PATH = Path(__file__).resolve().parents[2] / "demo" / "index.html"
 
 app = FastAPI(
-    title="ResearchLens API",
+    title="Nexus API",
     description="Production-Grade, Modular, Evidence-Grounded RAG Platform",
     version="1.1.0",
 )
 
+allowed_origins = [o.strip() for o in cfg.allowed_origins.split(",") if o.strip()] or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=allowed_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def structured_logging_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())[:8]
+    request.state.routing_mode = None
+    start = time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        latency_ms = round((time.perf_counter() - start) * 1000, 2)
+        routing_mode = getattr(request.state, "routing_mode", None)
+        metrics_registry.observe_request(
+            method=request.method,
+            path=request.url.path,
+            status_code=status_code,
+            latency_ms=latency_ms,
+            routing_mode=routing_mode,
+        )
+        logger.info(
+            "request_completed",
+            extra={
+                "event": "http_request",
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": status_code,
+                "latency_ms": latency_ms,
+                "routing_mode": routing_mode,
+            },
+        )
 
 
 class SystemState:
@@ -80,6 +124,8 @@ class SystemState:
             qdrant_indexer=self.qdrant,
             bm25_indexer=self.bm25,
             document_store=self.doc_store,
+            reranker=SystemRegistry.get_reranker(),
+            config=SystemRegistry.get_config(),
         )
         self.jobs: Dict[str, Dict[str, Any]] = {}
 
@@ -87,7 +133,19 @@ class SystemState:
 state = SystemState()
 
 
+@app.get("/", include_in_schema=False)
+def root() -> Dict[str, str]:
+    return {
+        "service": "Nexus API",
+        "health": "/health",
+        "ready": "/ready",
+        "demo": "/demo",
+        "docs": "/docs",
+    }
+
+
 @app.get("/health", response_model=HealthResponse)
+@app.head("/health", include_in_schema=False)
 def health() -> HealthResponse:
     qdr_healthy = state.qdrant.health_check()
     docs = state.doc_store.list_documents()
@@ -106,8 +164,7 @@ def ready() -> Dict[str, str]:
     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Qdrant not ready")
 
 
-@app.get("/metrics")
-def metrics() -> Dict[str, Any]:
+def _metrics_snapshot() -> Dict[str, int]:
     docs = state.doc_store.list_documents()
     return {
         "documents_total": len(docs),
@@ -118,19 +175,36 @@ def metrics() -> Dict[str, Any]:
     }
 
 
-@app.post("/query", response_model=QueryResponse)
-def query(request: QueryRequest) -> QueryResponse:
-    if not request.query or not request.query.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Query cannot be empty."
-        )
+@app.get("/metrics", response_class=PlainTextResponse)
+def metrics() -> PlainTextResponse:
+    body = metrics_registry.render_prometheus(_metrics_snapshot())
+    return PlainTextResponse(
+        content=body,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
+
+@app.get("/metrics/json")
+def metrics_json() -> Dict[str, Any]:
+    return _metrics_snapshot()
+
+
+@app.get("/demo", response_class=HTMLResponse)
+def demo_page() -> HTMLResponse:
+    if not DEMO_HTML_PATH.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Demo page not found.")
+    return HTMLResponse(content=DEMO_HTML_PATH.read_text(encoding="utf-8"))
+
+
+@app.post("/query", response_model=QueryResponse)
+def query(request: QueryRequest, http_request: Request) -> QueryResponse:
     try:
         res = state.orchestrator.query(
             query=request.query,
             document_ids=request.document_ids,
             mode=request.mode,
         )
+        http_request.state.routing_mode = res.execution_mode
 
         sources = [
             SourceReference(
@@ -167,15 +241,33 @@ def query(request: QueryRequest) -> QueryResponse:
         )
 
 
+@app.post("/query/stream")
+def query_stream(request: QueryRequest, http_request: Request) -> StreamingResponse:
+    def _event_generator() -> Iterator[str]:
+        try:
+            for event in state.orchestrator.query_stream(
+                query=request.query,
+                document_ids=request.document_ids,
+                mode=request.mode,
+            ):
+                if event.get("event") == "retrieval":
+                    http_request.state.routing_mode = event.get("execution_mode")
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            logger.error(f"Error streaming query: {exc}", exc_info=True)
+            yield f"data: {json.dumps({'event': 'error', 'detail': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/search", response_model=SearchResponse)
 def search(request: SearchRequest) -> SearchResponse:
-    if not request.query or not request.query.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Query cannot be empty."
-        )
-
     start_time = time.perf_counter()
-    k = max(1, min(request.top_k, 50))
+    k = request.top_k
     results: List[SearchItem] = []
 
     if request.strategy == "keyword":

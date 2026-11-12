@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nexus — Adaptive RAG Demo</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, sans-serif; color: #111827; background: #f8fafc; }
+    body { max-width: 820px; margin: 2rem auto; padding: 0 1rem; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; }
+    .row { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+    textarea, input, select { font: inherit; padding: 0.55rem 0.7rem; border: 1px solid #cbd5e1; border-radius: 6px; }
+    textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+    button { background: #2563eb; color: #fff; border: 0; padding: 0.6rem 1rem; border-radius: 6px; cursor: pointer; font-weight: 600; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .pill { display: inline-block; padding: 0.2rem 0.55rem; border-radius: 999px; background: #e2e8f0; font-size: 0.8rem; margin-right: 0.4rem; }
+    .ok { background: #dcfce7; color: #166534; }
+    .err { background: #fee2e2; color: #991b1b; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #f1f5f9; padding: 0.9rem; border-radius: 6px; }
+    .source { border-left: 3px solid #2563eb; padding-left: 0.75rem; margin-top: 0.6rem; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>Nexus Adaptive RAG</h1>
+  <div class="card row">
+    <label>API Base: <input id="baseUrl" value="" placeholder="Same origin (or http://localhost:8000)" size="32" /></label>
+    <button type="button" onclick="checkHealth()">Check Health</button>
+    <span id="healthBadge" class="pill">Unknown</span>
+  </div>
+
+  <div class="card">
+    <textarea id="queryInput" rows="3" placeholder="Ask a question across your indexed documents...">What is the Transformer architecture?</textarea>
+    <div class="row" style="margin-top: 0.75rem;">
+      <label>Mode:
+        <select id="modeSelect">
+          <option value="adaptive">Adaptive</option>
+          <option value="fast">Fast (BM25)</option>
+          <option value="balanced">Balanced (Hybrid + Conditional Rerank)</option>
+          <option value="deep">Deep (Multi-hop + Rerank)</option>
+        </select>
+      </label>
+      <button id="askBtn" type="button" onclick="askStream()">Ask (SSE Stream)</button>
+      <button id="searchBtn" type="button" onclick="runSearch()" style="background:#475569;">Search Only</button>
+    </div>
+  </div>
+
+  <div id="resultCard" class="card" style="display:none;">
+    <div id="metaRow" style="margin-bottom:0.6rem;"></div>
+    <pre id="answerBox"></pre>
+    <div id="sourcesBox"></div>
+  </div>
+
+  <script>
+    const api = (path) => (document.getElementById("baseUrl").value.trim().replace(/\/$/, "") || "") + path;
+
+    async function checkHealth() {
+      const badge = document.getElementById("healthBadge");
+      try {
+        const res = await fetch(api("/health"));
+        const data = await res.json();
+        badge.textContent = `${data.status} (${data.document_count} docs, ${data.chunk_count} chunks)`;
+        badge.className = "pill " + (data.qdrant_healthy ? "ok" : "err");
+      } catch (err) {
+        badge.textContent = "Offline: " + err.message;
+        badge.className = "pill err";
+      }
+    }
+
+    async function askStream() {
+      const query = document.getElementById("queryInput").value.trim();
+      const mode = document.getElementById("modeSelect").value;
+      if (!query) return;
+
+      const btn = document.getElementById("askBtn");
+      const card = document.getElementById("resultCard");
+      const meta = document.getElementById("metaRow");
+      const ans = document.getElementById("answerBox");
+      const srcs = document.getElementById("sourcesBox");
+
+      btn.disabled = true;
+      card.style.display = "block";
+      meta.innerHTML = '<span class="pill">Streaming...</span>';
+      ans.textContent = "";
+      srcs.innerHTML = "";
+
+      try {
+        const res = await fetch(api("/query/stream"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query, mode }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split("\n\n");
+          buffer = frames.pop() || "";
+          for (const frame of frames) {
+            const line = frame.split("\n").find((l) => l.startsWith("data: "));
+            if (!line) continue;
+            const evt = JSON.parse(line.slice(6));
+            if (evt.event === "retrieval") {
+              meta.innerHTML = `<span class="pill">Mode: ${evt.execution_mode}</span><span class="pill">Confidence: ${evt.confidence}</span><span class="pill">Retrieval: ${evt.latency_retrieval_ms} ms</span>`;
+            } else if (evt.event === "delta") {
+              ans.textContent += evt.text || "";
+            } else if (evt.event === "done") {
+              ans.textContent = evt.answer || ans.textContent;
+              meta.innerHTML = `<span class="pill">Mode: ${evt.execution_mode}</span><span class="pill">Confidence: ${evt.confidence}</span><span class="pill">Total: ${Number(evt.latency_ms || 0).toFixed(1)} ms</span>` + (evt.abstained ? '<span class="pill err">Abstained</span>' : "");
+              srcs.innerHTML = (evt.sources || []).map((s) => `<div class="source"><b>[${s.citation_id}] ${s.filename}</b> (${s.source_locator || s.chunk_id})<br/>${s.snippet}</div>`).join("");
+            } else if (evt.event === "error") {
+              throw new Error(evt.detail || "Stream error");
+            }
+          }
+        }
+      } catch (err) {
+        ans.textContent = "Error: " + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function runSearch() {
+      const query = document.getElementById("queryInput").value.trim();
+      if (!query) return;
+      const card = document.getElementById("resultCard");
+      const meta = document.getElementById("metaRow");
+      const ans = document.getElementById("answerBox");
+      const srcs = document.getElementById("sourcesBox");
+      card.style.display = "block";
+      meta.innerHTML = '<span class="pill">Hybrid Search</span>';
+      ans.textContent = "";
+      const res = await fetch(api("/search"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, top_k: 5, strategy: "hybrid" }),
+      });
+      const data = await res.json();
+      meta.innerHTML = `<span class="pill">Hits: ${data.total_results}</span><span class="pill">${Number(data.latency_ms || 0).toFixed(1)} ms</span>`;
+      srcs.innerHTML = (data.results || []).map((r) => `<div class="source"><b>#${r.rank} (${r.retriever}, score ${r.score.toFixed(4)})</b><br/>${r.text}</div>`).join("");
+    }
+
+    checkHealth();
+  </script>
+</body>
+</html>
