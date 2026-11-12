@@ -1,14 +1,14 @@
-# Nexus — Adaptive RAG frontend
+# Nexus — Adaptive RAG Frontend
 
-A light, Apple-inspired React interface for the Production-oriented Adaptive RAG project. Built around the repository's FastAPI endpoints and terminology: hybrid dense + BM25 retrieval, adaptive routing, confidence-gated reranking, grounded answers, citations, and evidence inspection.
+A light, Apple-inspired React interface for the Nexus Production-Oriented Adaptive RAG project. Built around the repository's FastAPI endpoints and terminology: hybrid dense + BM25 retrieval, adaptive routing, confidence-gated reranking, grounded answers, citations, and evidence inspection.
 
 ## Included
 
-- **Query workspace** — retrieval mode selection, streaming answers, confidence/latency/source summary, source references, and execution trace.
-- **Pipeline metrics** — a dedicated page for routing distribution, recorded benchmark quality, latency distribution, retrieval ablation comparison, and live operational index counts.
-- **Search explorer** — inspect raw passages through `/search` using hybrid, dense, or BM25 retrieval.
-- **Document library** — document list, filters, file upload integration point, and index status.
-- **API setup** — configure a backend base URL without editing the source.
+- **Query workspace** - retrieval mode selection, streaming answers, confidence/latency/source summary, source references, and execution trace.
+- **Pipeline metrics** - a dedicated page for routing distribution, recorded benchmark quality, latency distribution, retrieval ablation comparison, and live operational index counts.
+- **Search explorer** - inspect raw passages through `/search` using hybrid, dense, or BM25 retrieval.
+- **Document library** - document list, filters, file upload integration point, and index status.
+- **API setup** - configure a backend base URL without editing the source.
 - Responsive desktop and mobile layout, keyboard shortcut `⌘K` / `Ctrl+K`, accessible labels, reduced-motion support.
 
 ## Start locally
@@ -34,7 +34,7 @@ npm run preview
 The frontend uses these repository endpoints:
 
 - `GET /health`
-- `GET /metrics`
+- `GET /metrics/json`
 - `POST /query/stream` (Server-Sent Event chunks returned by a POST response stream)
 - `POST /search`
 
@@ -46,7 +46,7 @@ If the app is deployed under the **same origin** as FastAPI, leave the API URL b
 
 ## Metrics honesty
 
-The visible quality and latency charts are based on the repository's recorded 110-case adaptive benchmark and ablation data. They are explicitly labelled as recorded benchmark data. The live status panel only displays live values returned by `/health` and `/metrics`. It does not invent real-time traffic, quality scores, or request counts. End-to-end latency is kept distinct from retrieval-only latency because the former includes generation.
+The visible quality and latency charts are based on the repository's recorded 110-case adaptive benchmark and ablation data. They are explicitly labelled as recorded benchmark data. The live status panel only displays live values returned by `/health` and `/metrics/json`. It does not invent real-time traffic, quality scores, or request counts. End-to-end latency is kept distinct from retrieval-only latency because the former includes generation.
 
 ## Design direction
 

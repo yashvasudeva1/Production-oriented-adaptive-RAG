@@ -94,17 +94,17 @@ class TestMetadataExtractorConfidence:
     """Rule-based extractor annotates fields with confidence levels after fix."""
 
     @pytest.fixture(autouse=True)
-    def extractor(self):
+    def extractor(self, monkeypatch):
         """Load AdaptiveQueryMetadataExtractor via importlib, stubbing heavy deps."""
-        os.environ["OFFLINE_EVAL"] = "1"
+        monkeypatch.setenv("OFFLINE_EVAL", "1")
 
         stubs = {
             "langchain_groq": mock.MagicMock(),
             "langchain_core": mock.MagicMock(),
-            "sentence_transformers": mock.MagicMock(),
         }
         for name, stub in stubs.items():
-            sys.modules.setdefault(name, stub)
+            if name not in sys.modules:
+                monkeypatch.setitem(sys.modules, name, stub)
 
         qme_stub = mock.MagicMock()
         qme_stub.QueryMetadata = type("QM", (), {
@@ -113,7 +113,7 @@ class TestMetadataExtractorConfidence:
         })
         qme_stub.QueryMetadataExtractor = mock.MagicMock
         qme_stub.extract_query_metadata = mock.MagicMock(return_value=qme_stub.QueryMetadata())
-        sys.modules["src.components.query_metadata_extraction"] = qme_stub
+        monkeypatch.setitem(sys.modules, "src.components.query_metadata_extraction", qme_stub)
 
         path = os.path.join(ROOT, "src", "components", "query", "metadata.py")
         spec = importlib.util.spec_from_file_location("_metadata_standalone", path)
@@ -169,7 +169,7 @@ class TestMetadataExtractorConfidence:
 
 
 # ---------------------------------------------------------------------------
-# 2. Pareto frontier correctness (pure function tests — no heavy deps)
+# 2. Pareto frontier correctness (pure function tests - no heavy deps)
 # ---------------------------------------------------------------------------
 
 class TestParetoFrontier:
@@ -188,7 +188,7 @@ class TestParetoFrontier:
         """
         BUG FIX: strictly_better previously omitted mean_latency_ms.
         A config identical on recall/mrr/p50 but strictly better on mean
-        must now dominate — it didn't before the fix.
+        must now dominate - it didn't before the fix.
         """
         cfgs = {
             "fast_mean": self._cfg(0.9, 0.9, 5.0, 3.0),
@@ -298,7 +298,7 @@ class TestNDCG:
         assert abs(result - expected) < 1e-4, f"Expected {expected:.4f}, got {result:.4f}"
 
     def test_k_larger_than_list(self):
-        """When k > len(scores), it should not crash — truncates to available."""
+        """When k > len(scores), it should not crash - truncates to available."""
         result = _ndcg([1.0, 0.0], k=10)
         assert 0.0 <= result <= 1.0
 
@@ -309,7 +309,7 @@ class TestNDCG:
 
 class TestRetrievalFilterUnit:
     """
-    Unit-tests for RetrievalFilter.matches_chunk() — in-memory BM25 filter path.
+    Unit-tests for RetrievalFilter.matches_chunk() - in-memory BM25 filter path.
     Loads filters.py directly to avoid the full qdrant_client import chain.
     """
 
@@ -372,7 +372,7 @@ class TestRetrievalFilterUnit:
         # With stubs, just verify it doesn't crash and returns something
         try:
             result = rf.to_qdrant_filter()
-            # Either a real Filter object or a MagicMock — just not None
+            # Either a real Filter object or a MagicMock - just not None
             assert result is not None or True  # lenient assertion with stubs
         except Exception:
             pass  # ok if qdrant stubs break the conversion
@@ -435,4 +435,79 @@ class TestParetoAblationPatch:
         # The fixed version uses `else None` not `else 1.0`
         assert "else None" in source, (
             "Benchmark must use 'else None' for empty categories, not 'else 1.0'"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 6. Attention Heads Query & Quantitative Signal Regression Tests
+# ---------------------------------------------------------------------------
+
+class TestAttentionHeadsQueryRegression:
+    """
+    Validates the fix for 'How many attention heads does the base model use?':
+    - Stopword filtering does not drop critical mathematical/model symbols
+    - Quantitative queries route appropriately
+    - End-to-end adaptive retrieval retrieves the answer chunk and answers 8
+    """
+
+    def test_interrogative_stopwords_filtering(self):
+        from src.components.keyword_matching import (
+            INTERROGATIVE_QUERY_STOPWORDS,
+            tokenize,
+        )
+        query = "How many attention heads does the base model use?"
+        tokens = tokenize(query)
+        filtered = [t for t in tokens if t not in INTERROGATIVE_QUERY_STOPWORDS]
+        # 'how', 'many', 'does', 'use', 'the' should be stripped
+        assert "attention" in filtered
+        assert "heads" in filtered
+        assert "base" in filtered
+        assert "model" in filtered
+        assert "how" not in filtered
+        assert "many" not in filtered
+        assert "does" not in filtered
+
+    def test_quantitative_signal_detection(self):
+        from src.components.query.signals import extract_query_signals
+        signals = extract_query_signals("How many attention heads does the base model use?")
+        assert signals.is_quantitative is True
+        assert len(signals.comparison_terms) == 0
+        assert signals.intent != "comparison"
+
+    @requires_qdrant
+    def test_attention_heads_base_model_retrieval(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OFFLINE_EVAL", "1")
+        monkeypatch.setenv("ALLOW_MOCK_EMBEDDER", "1")
+        monkeypatch.setenv("QDRANT_URL", "")
+        monkeypatch.setenv("QDRANT_PATH", "")
+        monkeypatch.setenv("BM25_INDEX_PATH", str(tmp_path / "chunks.json"))
+        from src.components.registry import SystemRegistry
+        SystemRegistry.reset()
+        from src.components.chunking.models import Chunk
+        from src.components.orchestration.pipeline import RAGOrchestrator
+        orchestrator = RAGOrchestrator()
+        if orchestrator.bm25.count() == 0:
+            attention_chunk = Chunk(
+                chunk_id="chk_8b20a8b1516452ec",
+                document_id="doc_attention_paper",
+                text=(
+                    "3.2.2 Multi-Head Attention. "
+                    "In this work we employ h = 8 parallel attention layers, or heads. "
+                    "For each of these we use d_k = d_v = d_model/h = 64 in the base model."
+                ),
+                section="3.2.2 Multi-Head Attention",
+                source_locator="Attention Is All You Need.pdf (p.5)",
+            )
+            orchestrator.bm25.upsert_chunks([attention_chunk])
+            vecs = orchestrator.embedder.embed_texts([attention_chunk.text])
+            orchestrator.qdrant.upsert_chunks([attention_chunk], vecs)
+        res = orchestrator.query("How many attention heads does the base model use?", mode="adaptive")
+        assert not res.abstained, f"Query abstained unexpectedly: {res.answer}"
+        assert res.confidence >= 0.70, f"Confidence too low: {res.confidence}"
+        source_chunk_ids = [s.get("chunk_id") for s in res.sources]
+        assert "chk_8b20a8b1516452ec" in source_chunk_ids, (
+            f"Chunk chk_8b20a8b1516452ec not in retrieved sources: {source_chunk_ids}"
+        )
+        assert "8" in res.answer or any("8" in (s.get("snippet") or "") for s in res.sources), (
+            f"Answer or sources do not mention '8': {res.answer}"
         )

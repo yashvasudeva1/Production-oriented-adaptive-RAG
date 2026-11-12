@@ -120,3 +120,9 @@ class DocumentStore:
             self.save()
             return True
         return False
+
+    def clear(self) -> None:
+        """Clear all indexed documents and parent texts."""
+        self._documents.clear()
+        self._parent_texts.clear()
+        self.save()

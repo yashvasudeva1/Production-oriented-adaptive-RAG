@@ -20,6 +20,7 @@ from ..retrieval.confidence import RetrievalConfidence, RetrievalConfidenceScore
 from ..retrieval.dense import DenseRetriever
 from ..retrieval.fusion import UnifiedCandidate, fuse_candidates, reciprocal_rank_fusion
 from ..retrieval.hybrid import HybridRetriever
+from ..retrieval.iterative import BoundedIterativeRetriever
 from ..retrieval.keyword import KeywordRetriever
 from ..retrieval.multi_query import MultiQueryRetriever
 from ..retrieval.parent_child import ParentChildRetriever
@@ -30,6 +31,8 @@ try:
     from config.models import AppConfig, get_config
 except ImportError:
     from ....config.models import AppConfig, get_config
+
+from ..registry import SystemRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,8 @@ class RetrievalMetadata(BaseModel):
     parent_expanded: bool = False
     multi_query_used: bool = False
     decomposed: bool = False
+    iterative_hops: int = 1
+    bridge_queries: List[str] = Field(default_factory=list)
     fast_rank: Optional[int] = None
     balanced_rank: Optional[int] = None
     deep_rank: Optional[int] = None
@@ -103,11 +108,40 @@ class RAGOrchestrator:
         config: Optional[AppConfig] = None,
     ) -> None:
         self.config = config or get_config()
-        self.doc_store = document_store or DocumentStore()
+        self.doc_store = document_store or SystemRegistry.get_doc_store()
         self.planner = query_planner or QueryPlanner(document_store=self.doc_store)
-        self.embedder = embedder or SentenceTransformerEmbedder()
-        self.qdrant = qdrant_indexer or QdrantIndexer(vector_size=self.embedder.dimension)
-        self.bm25 = bm25_indexer or BM25Indexer()
+        self.embedder = embedder or SystemRegistry.get_embedder()
+        self.qdrant = qdrant_indexer or SystemRegistry.get_qdrant()
+        self.bm25 = bm25_indexer or SystemRegistry.get_bm25()
+
+        # Synchronize in-memory Qdrant with indexed BM25 chunks if Qdrant is empty
+        if self.qdrant.count() == 0 and self.bm25.count() > 0:
+            logger.info("Synchronizing in-memory Qdrant with indexed BM25 chunks...")
+            from ..chunking.models import Chunk
+            loaded = [Chunk.from_dict(c) for c in self.bm25._all_chunks]
+            # Fast disk cache for vectors to achieve sub-second startup
+            import numpy as np
+            from pathlib import Path
+            cache_file = Path(__file__).resolve().parents[3] / "metadata" / f"chunk_embeddings_{self.embedder.dimension}.npz"
+            cached_dict = {}
+            if cache_file.exists():
+                try:
+                    data = np.load(cache_file)
+                    cached_dict = {k: data[k] for k in data.files}
+                except Exception as c_exc:
+                    logger.debug(f"Could not load vector cache {cache_file}: {c_exc}")
+            missing = [c for c in loaded if c.chunk_id not in cached_dict]
+            if missing:
+                new_vecs = self.embedder.embed_texts([c.text for c in missing])
+                for c, v in zip(missing, new_vecs):
+                    cached_dict[c.chunk_id] = np.array(v, dtype=np.float32)
+                try:
+                    np.savez_compressed(cache_file, **cached_dict)
+                    logger.info(f"Saved {len(cached_dict)} precomputed chunk vectors to {cache_file.name}")
+                except Exception as s_exc:
+                    logger.debug(f"Could not save vector cache: {s_exc}")
+            vecs = [cached_dict[c.chunk_id].tolist() for c in loaded]
+            self.qdrant.upsert_chunks(loaded, vecs)
 
         self.dense_retriever = DenseRetriever(
             indexer=self.qdrant, embedder=self.embedder
@@ -126,12 +160,21 @@ class RAGOrchestrator:
         self.multi_query_retriever = MultiQueryRetriever(
             base_retriever=self.dense_retriever
         )
+        self.iterative_retriever = BoundedIterativeRetriever(
+            dense_retriever=self.dense_retriever,
+            keyword_retriever=self.keyword_retriever,
+            max_hops=2,
+            top_k_per_hop=6,
+        )
 
-        self.reranker = reranker or CrossEncoderReranker()
+        self.reranker = reranker or SystemRegistry.get_reranker()
         self.context_filter = context_filter or ContextFilter()
         self.evidence_gate = evidence_gate or EvidenceGate()
         self.generator = generator or GroundedGenerator()
-        self.confidence_scorer = confidence_scorer or RetrievalConfidenceScorer()
+        self.confidence_scorer = confidence_scorer or RetrievalConfidenceScorer(
+            confidence_high_threshold=self.config.confidence_high_threshold,
+            confidence_medium_threshold=self.config.confidence_medium_threshold,
+        )
 
     def _search_keyword(
         self,
@@ -202,6 +245,51 @@ class RAGOrchestrator:
             cache_mgr.set_retrieval(query=query, filter_repr=filt_key, top_k=top_k, mode="dense", results=results)
         return results
 
+    def _consolidate_multi_hop_candidates(
+        self,
+        reranked_candidates: List[RerankerResult],
+        hop_anchor_ids: Set[str],
+        num_hops: int = 1,
+        min_score_ratio: float = 0.55,
+        target_top_k: int = 3,
+    ) -> List[RerankerResult]:
+        """
+        Post-Hop Global Consolidation & Pruning:
+        1. Guarantees Hop Coverage Preservation: locks in top-1 bridge chunk from each hop.
+        2. Drops tail chunks scoring < min_score_ratio (0.55) of top-1 score unless it's a hop anchor.
+        3. Deduplicates and caps final context list to max(target_top_k, num_hops + 1) chunks.
+        """
+        if not reranked_candidates:
+            return []
+
+        top_score = max((r.score for r in reranked_candidates), default=1.0)
+        score_threshold = top_score * min_score_ratio
+
+        # Separate anchor chunks and valid candidate chunks
+        anchors = [r for r in reranked_candidates if r.chunk_id in hop_anchor_ids]
+        non_anchors = [
+            r for r in reranked_candidates
+            if r.chunk_id not in hop_anchor_ids and r.score >= score_threshold
+        ]
+
+        max_final_chunks = max(target_top_k, num_hops + 1)
+
+        # Deduplicate and merge anchors with top-scoring non-anchors up to max_final_chunks
+        seen_chunk_ids = {r.chunk_id for r in anchors}
+        combined = list(anchors)
+        for r in non_anchors:
+            if len(combined) >= max_final_chunks:
+                break
+            if r.chunk_id not in seen_chunk_ids:
+                seen_chunk_ids.add(r.chunk_id)
+                combined.append(r)
+
+        combined.sort(key=lambda r: r.score, reverse=True)
+        for rank, r in enumerate(combined, start=1):
+            r.rank = rank
+
+        return combined
+
     def _retrieve_and_gate(
         self,
         query: str,
@@ -220,7 +308,18 @@ class RAGOrchestrator:
         )
         latencies["planning_ms"] = (time.perf_counter() - t_plan) * 1000
 
-        c_doc_ids = plan.candidate_document_ids or document_ids
+        # Separate Explicit API Filters from Inferred NL Filters
+        if document_ids:
+            c_doc_ids = document_ids
+            is_explicit = True
+        elif plan.is_explicit_filter and plan.explicit_document_ids:
+            c_doc_ids = plan.explicit_document_ids
+            is_explicit = True
+        else:
+            c_doc_ids = None
+            is_explicit = False
+
+        inferred_doc_ids = plan.inferred_document_ids or []
         active_mode = plan.execution_mode
         cascade_stages: List[str] = []
         escalation_reason: Optional[str] = None
@@ -240,6 +339,8 @@ class RAGOrchestrator:
         did_decompose = False
 
         exact_ids = plan.retrieval_signals.get("exact_identifiers", [])
+        iterative_hops = 1
+        bridge_queries_used: List[str] = []
 
         final_context: List[RerankerResult] = []
         verdict: Optional[EvidenceVerdict] = None
@@ -248,7 +349,7 @@ class RAGOrchestrator:
         # STAGE 1: FAST ROUTE (BM25 lexical matching in < 1ms)
         # -----------------------------------------------------------------
         conf: Optional[RetrievalConfidence] = None
-        m_filter = plan.retrieval_filter
+        m_filter = plan.retrieval_filter if (is_explicit and getattr(self.config, "metadata_filter_enabled", True)) else None
 
         if active_mode == "fast":
             cascade_stages.append("fast_bm25")
@@ -260,6 +361,20 @@ class RAGOrchestrator:
                 plan.retrieval_signals,
                 metadata_filter=m_filter,
             )
+            # Zero/Low-Hit Fallback: if hard filter produced < top_k candidates, relax to full search
+            if c_doc_ids and len(kw_hits) < plan.top_k_keyword:
+                kw_relaxed = self._search_keyword(
+                    plan.normalized_query,
+                    None,
+                    plan.top_k_keyword,
+                    plan.retrieval_signals,
+                    metadata_filter=None,
+                )
+                seen_ids = {k.chunk_id for k in kw_hits}
+                for rk in kw_relaxed:
+                    if rk.chunk_id not in seen_ids:
+                        kw_hits.append(rk)
+                        seen_ids.add(rk.chunk_id)
             lat_fast = (time.perf_counter() - t_ret) * 1000
             latencies["bm25_ms"] = lat_fast
             latencies["fast_retrieval_ms"] = lat_fast
@@ -352,14 +467,15 @@ class RAGOrchestrator:
             latencies["dense_ms"] = lat_hybrid * 0.7
             latencies["bm25_ms"] = lat_hybrid * 0.3
 
-            # Additive fusion with exact match protection
+            # Additive fusion with exact match protection and inferred metadata soft boost
             t_fuse = time.perf_counter()
             fused = fuse_candidates(
                 all_candidate_runs,
                 method=self.config.fusion_method,
-                k=60,
+                k=20,
                 top_n=max(15, plan.top_k * 2),
                 exact_identifiers=exact_ids,
+                inferred_document_ids=inferred_doc_ids,
             )
             latencies["fusion_ms"] = (time.perf_counter() - t_fuse) * 1000
             fused_count = len(fused)
@@ -374,21 +490,55 @@ class RAGOrchestrator:
             )
             latencies["confidence_ms"] = (time.perf_counter() - t_c) * 1000
 
-            # Conditional reranking: bypass if confidence is high, rerank top candidates if ambiguous
+            # Conditional reranking: Top-1 Consensus Guard for Fast-Path Bypass
+            # Only allow full Cross-Encoder bypass (Confidence >= 0.82) when:
+            # 1) Confidence >= 0.82 AND
+            # 2) Either rank_BM25(d1) == rank_Dense(d1) == 1 OR exact identifier in d1 and zero other top-5 candidates.
+            # For borderline band (0.65 <= Confidence < 0.82): run Tiered Micro-Rerank on Top-6 fused candidates.
             t_rerank = time.perf_counter()
-            should_rerank = (
-                plan.requires_reranking
-                and self.reranker.should_rerank(
-                    query_type=plan.query_type,
-                    execution_mode="balanced",
-                    candidates=fused,
-                    confidence=conf,
-                )
+            top_bm25_id = kw_hits[0].chunk_id if kw_hits else None
+            top_dense_id = dense_hits[0].chunk_id if dense_hits else None
+            top1_agreement = (top_bm25_id is not None and top_bm25_id == top_dense_id)
+
+            has_unique_exact_id = False
+            if exact_ids and fused:
+                d1_text = getattr(fused[0], "text", "").lower()
+                for eid in exact_ids:
+                    eid_lower = eid.lower()
+                    if eid_lower in d1_text:
+                        in_others = any(eid_lower in getattr(c, "text", "").lower() for c in fused[1:5])
+                        if not in_others:
+                            has_unique_exact_id = True
+                            break
+
+            can_full_bypass = (
+                conf.score >= 0.82
+                and (top1_agreement or has_unique_exact_id)
             )
+
+            if mode == "hybrid_rerank":
+                should_rerank = True
+                rerank_pool = fused
+            elif mode == "hybrid":
+                should_rerank = False
+                rerank_pool = fused
+            elif can_full_bypass:
+                should_rerank = False
+                rerank_pool = fused
+            else:
+                should_rerank = True
+                # Tiered Micro-Rerank for Borderline Band (0.65 <= conf.score < 0.82)
+                if conf.score >= 0.65:
+                    rerank_pool = fused[:6]
+                else:
+                    rerank_pool = fused[:10]
 
             if should_rerank:
                 reranked = self.reranker.rerank(
-                    query=plan.normalized_query, candidates=fused, top_k=plan.rerank_top_k
+                    query=plan.normalized_query,
+                    candidates=rerank_pool,
+                    top_k=plan.rerank_top_k,
+                    max_candidates=len(rerank_pool),
                 )
                 did_rerank = True
             else:
@@ -420,12 +570,35 @@ class RAGOrchestrator:
                 final_context = ctx
                 verdict = v_bal
             else:
-                if mode != "balanced" and (plan.complexity in ("medium", "high") or plan.sub_queries):
-                    escalation_reason = f"Balanced evidence gate failed: {v_bal.reason}"
-                    active_mode = "deep"
-                else:
+                # Cross-Encoder Recovery: If reranking was bypassed but evidence gate failed,
+                # invoke the cross-encoder on the fused candidates to salvage high-precision evidence.
+                if not did_rerank and mode not in ("fast", "bm25", "hybrid"):
+                    t_rec = time.perf_counter()
+                    reranked = self.reranker.rerank(
+                        query=plan.normalized_query, candidates=fused, top_k=plan.rerank_top_k
+                    )
+                    did_rerank = True
+                    latencies["reranker_recovery_ms"] = (time.perf_counter() - t_rec) * 1000
+                    if plan.requires_parent_child:
+                        reranked = self.parent_child_retriever.expand_candidates(
+                            reranked,
+                            max_parents=plan.max_parents,
+                            max_parent_tokens=plan.max_parent_tokens,
+                        )
+                    ctx = self.context_filter.filter_context(reranked, max_tokens=plan.context_budget)
+                    v_bal = self.evidence_gate.evaluate(plan.normalized_query, ctx)
+
+                if v_bal.allowed:
                     final_context = ctx
                     verdict = v_bal
+                else:
+                    # Calibrated Escalation: If evidence remains insufficient, Adaptive mode escalates to Deep Route
+                    if mode not in ("balanced", "hybrid", "hybrid_rerank"):
+                        escalation_reason = f"Balanced evidence gate failed: {v_bal.reason}"
+                        active_mode = "deep"
+                    else:
+                        final_context = ctx
+                        verdict = v_bal
 
         # -----------------------------------------------------------------
         # STAGE 3: DEEP ROUTE (Additive Expansion: Decomposition & Late Parent Expansion)
@@ -433,6 +606,13 @@ class RAGOrchestrator:
         if active_mode == "deep" and (verdict is None or not verdict.allowed):
             cascade_stages.append("deep_expansion")
             t_ret = time.perf_counter()
+
+            hop_anchor_chunk_ids: Set[str] = set()
+            if all_candidate_runs and all_candidate_runs[0]:
+                top_c = all_candidate_runs[0][0]
+                cid = getattr(top_c, "chunk_id", None) or (top_c.get("chunk_id") if isinstance(top_c, dict) else None)
+                if cid:
+                    hop_anchor_chunk_ids.add(str(cid))
 
             sub_queries = plan.sub_queries or [plan.normalized_query]
             if len(sub_queries) > 1:
@@ -450,13 +630,107 @@ class RAGOrchestrator:
                 if base_kw:
                     all_candidate_runs.append(base_kw)
                     keyword_count += len(base_kw)
+                    hop_anchor_chunk_ids.add(str(base_kw[0].chunk_id))
 
-            # Sub-query searches added additively on fine-grained child chunks
+            # Sub-query searches: run per-sub-query RRF fusion + relevance threshold.
+            # Prevents irrelevant sub-query chunks from polluting the global context.
+            _MIN_SUBQ_THRESHOLD_RATIO = 0.40  # Keep chunks at >= 40% of top sub-query RRF score
             for sub_q in sub_queries[:3]:
                 sub_dense = self._search_dense(sub_q, c_doc_ids, plan.top_k_dense, metadata_filter=m_filter)
-                if sub_dense:
+                sub_kw = self._search_keyword(sub_q, c_doc_ids, plan.top_k_keyword, plan.retrieval_signals, metadata_filter=m_filter)
+
+                # Fuse sub-query dense + keyword via RRF before adding to global pool
+                sub_q_runs = [r for r in [sub_dense, sub_kw] if r]
+                if sub_q_runs:
+                    from ..retrieval.fusion import fuse_candidates as _fuse
+                    sub_fused = _fuse(
+                        sub_q_runs,
+                        method=self.config.fusion_method,
+                        k=20,
+                        top_n=plan.top_k_dense,
+                        exact_identifiers=exact_ids,
+                    )
+                    if sub_fused:
+                        # Apply minimum relevance threshold: discard low-signal chunks
+                        top_sub_score = sub_fused[0].score if sub_fused[0].score > 0 else 1e-6
+                        threshold = top_sub_score * _MIN_SUBQ_THRESHOLD_RATIO
+                        filtered_sub = [c for c in sub_fused if c.score >= threshold]
+                        if filtered_sub:
+                            all_candidate_runs.append(filtered_sub)
+                            dense_count += len([c for c in filtered_sub if c.dense_score is not None])
+                            keyword_count += len([c for c in filtered_sub if c.keyword_score is not None])
+                            hop_anchor_chunk_ids.add(str(filtered_sub[0].chunk_id))
+                elif sub_dense:
                     all_candidate_runs.append(sub_dense)
                     dense_count += len(sub_dense)
+                    hop_anchor_chunk_ids.add(str(sub_dense[0].chunk_id))
+                elif sub_kw:
+                    all_candidate_runs.append(sub_kw)
+                    keyword_count += len(sub_kw)
+                    hop_anchor_chunk_ids.add(str(sub_kw[0].chunk_id))
+
+            # Multi-query perspective expansion for vocabulary coverage
+            if plan.requires_multi_query:
+                t_mq = time.perf_counter()
+                mq_queries = self.multi_query_retriever.generate_queries(plan.normalized_query)
+                if len(mq_queries) > 1:
+                    did_multi_query = True
+                    for mq_q in mq_queries[1:]:
+                        mq_dense = self._search_dense(mq_q, c_doc_ids, plan.top_k_dense, metadata_filter=m_filter)
+                        if mq_dense:
+                            all_candidate_runs.append(mq_dense)
+                            mq_count += len(mq_dense)
+                            dense_count += len(mq_dense)
+                        mq_kw = self._search_keyword(mq_q, c_doc_ids, plan.top_k_keyword, plan.retrieval_signals, metadata_filter=m_filter)
+                        if mq_kw:
+                            all_candidate_runs.append(mq_kw)
+                            mq_count += len(mq_kw)
+                            keyword_count += len(mq_kw)
+                latencies["multi_query_ms"] = (time.perf_counter() - t_mq) * 1000
+
+            # Bounded Iterative Multi-Hop Retrieval: bridge entity expansion
+            t_iter = time.perf_counter()
+            seed_chunks: List[Any] = []
+            for run in all_candidate_runs:
+                if run:
+                    seed_chunks.extend(run[:3])
+
+            if seed_chunks:
+                supp_chunks, hop_meta = self.iterative_retriever.execute_bounded_hop(
+                    query=plan.normalized_query,
+                    initial_chunks=seed_chunks,
+                    candidate_document_ids=c_doc_ids,
+                    metadata_filter=m_filter,
+                )
+                if supp_chunks:
+                    parsed_supp: List[SearchResult] = []
+                    for sc in supp_chunks:
+                        if isinstance(sc, SearchResult):
+                            parsed_supp.append(sc)
+                        elif hasattr(sc, "chunk_id"):
+                            parsed_supp.append(
+                                SearchResult(
+                                    chunk_id=sc.chunk_id,
+                                    document_id=getattr(sc, "document_id", "unknown"),
+                                    text=sc.text,
+                                    score=getattr(sc, "score", 0.0),
+                                    rank=getattr(sc, "rank", 1),
+                                    parent_id=getattr(sc, "parent_id", None),
+                                    source_locator=getattr(sc, "source_locator", None),
+                                    page=getattr(sc, "page", None),
+                                    section=getattr(sc, "section", None),
+                                    chunk_type="text",
+                                    retriever_name="bounded_iterative_hop",
+                                    metadata=getattr(sc, "metadata", {}),
+                                )
+                            )
+                    if parsed_supp:
+                        all_candidate_runs.append(parsed_supp)
+                        dense_count += len(parsed_supp)
+                        hop_anchor_chunk_ids.add(str(parsed_supp[0].chunk_id))
+                    bridge_queries_used = hop_meta.get("bridge_queries", [])
+                    iterative_hops = hop_meta.get("hop_count", 1)
+            latencies["iterative_hop_ms"] = (time.perf_counter() - t_iter) * 1000
 
             latencies["deep_retrieval_ms"] = (time.perf_counter() - t_ret) * 1000
 
@@ -465,9 +739,10 @@ class RAGOrchestrator:
             deep_fused = fuse_candidates(
                 all_candidate_runs,
                 method=self.config.fusion_method,
-                k=60,
+                k=20,
                 top_n=plan.top_k * 2,
                 exact_identifiers=exact_ids,
+                inferred_document_ids=inferred_doc_ids,
             )
             latencies["fusion_ms"] = (time.perf_counter() - t_fuse) * 1000
             fused_count = len(deep_fused)
@@ -486,9 +761,23 @@ class RAGOrchestrator:
             reranked = self.reranker.rerank(
                 query=plan.normalized_query,
                 candidates=deep_fused,
-                top_k=plan.rerank_top_k or 8,
+                top_k=max(15, len(deep_fused)),
+                max_candidates=len(deep_fused),
             )
             did_rerank = True
+
+            # Post-Hop Global Consolidation & Pruning:
+            # 1. Locks in top-1 bridge chunk from each hop (Hop Coverage Preservation).
+            # 2. Prunes tail chunks with score < 0.55 * top_1 unless they are a hop anchor.
+            # 3. Deduplicates and caps final context list to max(target_top_k, num_hops + 1).
+            if hop_anchor_chunk_ids:
+                reranked = self._consolidate_multi_hop_candidates(
+                    reranked_candidates=reranked,
+                    hop_anchor_ids=hop_anchor_chunk_ids,
+                    num_hops=max(1, len(hop_anchor_chunk_ids)),
+                    min_score_ratio=0.55,
+                    target_top_k=plan.top_k or 5,
+                )
             latencies["reranking_ms"] = (time.perf_counter() - t_rerank) * 1000
             reranked_count = len(reranked)
 
@@ -534,6 +823,8 @@ class RAGOrchestrator:
             parent_expanded=did_parent_expand,
             multi_query_used=did_multi_query,
             decomposed=did_decompose,
+            iterative_hops=iterative_hops,
+            bridge_queries=bridge_queries_used,
             dense_candidates=dense_count,
             keyword_candidates=keyword_count,
             multi_query_candidates=mq_count,
@@ -559,6 +850,8 @@ class RAGOrchestrator:
         start_time: float,
     ) -> RAGResponse:
         total_latency = (time.perf_counter() - start_time) * 1000
+        latencies["generation_ms"] = 0.0
+        latencies["retrieval_ms"] = max(0.0, total_latency - latencies.get("planning_ms", 0.0))
         latencies["total_ms"] = total_latency
         return RAGResponse(
             query=query,
@@ -600,6 +893,9 @@ class RAGOrchestrator:
         latencies["generation_ms"] = (time.perf_counter() - t_gen) * 1000
 
         total_latency = (time.perf_counter() - start_time) * 1000
+        latencies["retrieval_ms"] = max(
+            0.0, total_latency - latencies.get("planning_ms", 0.0) - latencies["generation_ms"]
+        )
         latencies["total_ms"] = total_latency
 
         return RAGResponse(

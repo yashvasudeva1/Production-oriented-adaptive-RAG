@@ -5,7 +5,14 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
-    // Uncomment if you prefer using a same-origin /api proxy in development.
-    // proxy: { '/api': { target: 'http://localhost:8000', changeOrigin: true, rewrite: p => p.replace(/^\/api/, '') } },
+    port: 5173,
+    proxy: {
+      '/health': 'http://127.0.0.1:8000',
+      '/ready': 'http://127.0.0.1:8000',
+      '/metrics': 'http://127.0.0.1:8000',
+      '/query': 'http://127.0.0.1:8000',
+      '/search': 'http://127.0.0.1:8000',
+      '/documents': 'http://127.0.0.1:8000',
+    },
   },
 });

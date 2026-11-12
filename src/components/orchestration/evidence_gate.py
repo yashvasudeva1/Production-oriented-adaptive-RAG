@@ -30,7 +30,7 @@ class EvidenceGate:
         self,
         min_supporting_chunks: int = 1,
         min_confidence: float = 0.20,
-        min_rerank_threshold: float = -5.0,
+        min_rerank_threshold: float = -5.5,
     ) -> None:
         self.min_supporting_chunks = min_supporting_chunks
         self.min_confidence = min_confidence
@@ -54,15 +54,19 @@ class EvidenceGate:
 
         # 1. Adversarial Injection and Jailbreak Guard
         ADVERSARIAL_PATTERNS = [
-            r"ignore\s+(all\s+)?(previous|prior)\s+instructions",
-            r"system\s+(prompt|override)",
+            r"ignore\s+(all\s+)?(previous|prior|system|factual|facts|evidence|context|rules)",
+            r"system\s+(prompt|override|message|instruction)",
             r"you\s+are\s+now\s+dan",
+            r"act\s+as\s+(an?\s+)?(unrestricted|jailbroken|dan)",
+            r"forget\s+(that\s+)?you\s+are",
+            r"declare\s+that\s+.*was\s+invented",
             r"bypass\s+authentication",
             r"reveal\s+(database\s+)?credentials",
             r"secret\s+administrator\s+passwords",
             r"manufacture\s+explosives",
             r"drop\s+table",
             r"select\s+\*\s+from",
+            r"sql\s+injection",
             r"<script>",
             r"unrestricted\s+chatbot\s+without\s+citations",
             r"private\s+tenants\s+in\s+the\s+database",
@@ -105,7 +109,8 @@ class EvidenceGate:
             "any", "some", "each", "into", "over", "after", "before", "more",
             "also", "than", "been", "has", "had", "would", "could", "should",
             "its", "our", "their", "will", "out", "other", "give", "show",
-            "provide", "find", "use", "used", "using", "between", "under", "per"
+            "provide", "find", "use", "used", "using", "between", "under", "per",
+            "won", "score", "year", "time", "place", "make", "made", "good", "new"
         }
         q_tokens = re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", q_lower)
         key_q_words = [w for w in q_tokens if w not in STOPWORDS]
@@ -117,8 +122,16 @@ class EvidenceGate:
         overlap_words = [w for w in key_q_words if w in combined_text]
         overlap_ratio = len(overlap_words) / max(1, len(key_q_words))
 
+        # Check that at least one single chunk contains cohesive evidence (prevents cross-doc accidental word matching)
+        max_chunk_overlap = max((len([w for w in key_q_words if w in c.text.lower()]) for c in viable_chunks), default=0)
+
         # 3. Evidence sufficiency check: unanswerable / out-of-domain detection
-        if len(overlap_words) == 0 or (len(overlap_words) < 2 and len(key_q_words) >= 3) or overlap_ratio < 0.25:
+        if (
+            len(overlap_words) == 0
+            or (len(overlap_words) < 2 and len(key_q_words) >= 3)
+            or overlap_ratio < 0.22
+            or (len(key_q_words) >= 3 and max_chunk_overlap < 2 and overlap_ratio < 0.30)
+        ):
             return EvidenceVerdict(
                 allowed=False,
                 confidence=round(overlap_ratio * 0.3, 2),
@@ -129,10 +142,28 @@ class EvidenceGate:
                 supporting_chunks=[],
             )
 
-        # 4. Authentic calibrated confidence score (no artificial max(0.4, ...) floor)
+        # Check that quantitative/count queries contain at least one numeric entity/digit in top chunks
+        is_quant = bool(re.search(r"\b(?:how many|how much|what percentage|count of|number of|what year|when)\b", q_lower))
+        if is_quant:
+            has_numeric_evidence = any(
+                re.search(r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b", c.text.lower())
+                for c in viable_chunks[:3]
+            )
+            if not has_numeric_evidence:
+                return EvidenceVerdict(
+                    allowed=False,
+                    confidence=round(overlap_ratio * 0.2, 2),
+                    reason="The query asks for a quantitative count or measurement, but the retrieved context contains no numeric values or counts.",
+                    supporting_chunks=[],
+                )
+
+        # 4. Authentic calibrated confidence score
         best_score = max((c.rerank_score for c in viable_chunks), default=0.0)
-        if best_score > 1.0 or best_score < 0.0:
-            sig_score = 1.0 / (1.0 + math.exp(-max(-6.0, min(6.0, best_score))))
+        if best_score > 1.0:
+            # Raw BM25 scores (typically 2 to 15) normalized linearly instead of saturating sigmoid
+            sig_score = min(1.0, max(0.0, best_score / 15.0))
+        elif best_score < 0.0:
+            sig_score = 1.0 / (1.0 + math.exp(-max(-6.0, best_score)))
         else:
             sig_score = min(1.0, best_score * 20.0) if best_score < 0.05 else best_score
 

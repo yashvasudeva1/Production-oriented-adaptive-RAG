@@ -8,7 +8,7 @@ from typing import Optional
 from config.models import AppConfig
 from .indexing.bm25_indexer import BM25Indexer
 from .indexing.document_store import DocumentStore
-from .indexing.embedder import SentenceTransformerEmbedder
+from .indexing.embedder import BaseEmbedder, GeminiEmbedder, SentenceTransformerEmbedder
 from .indexing.qdrant_indexer import QdrantIndexer
 from .reranker import CrossEncoderReranker
 
@@ -23,7 +23,7 @@ class SystemRegistry:
     """
 
     _lock = threading.RLock()
-    _embedder: Optional[SentenceTransformerEmbedder] = None
+    _embedder: Optional[BaseEmbedder] = None
     _reranker: Optional[CrossEncoderReranker] = None
     _qdrant: Optional[QdrantIndexer] = None
     _bm25: Optional[BM25Indexer] = None
@@ -39,13 +39,30 @@ class SystemRegistry:
         return cls._config
 
     @classmethod
-    def get_embedder(cls) -> SentenceTransformerEmbedder:
+    def get_embedder(cls) -> BaseEmbedder:
         if cls._embedder is None:
             with cls._lock:
                 if cls._embedder is None:
                     cfg = cls.get_config()
-                    logger.info("Initializing shared SentenceTransformerEmbedder")
-                    cls._embedder = SentenceTransformerEmbedder(model_name=cfg.embedding_model)
+                    m_lower = cfg.embedding_model.lower()
+                    if "gemini" in m_lower and "embeddinggemma" not in m_lower:
+                        dim = getattr(cfg, "embedding_dimension", None) or 768
+                        logger.info(
+                            f"Initializing shared GeminiEmbedder ({cfg.embedding_model}, dim: {dim})"
+                        )
+                        cls._embedder = GeminiEmbedder(
+                            model_name=cfg.embedding_model,
+                            api_key=cfg.gemini_api_key or os.getenv("GEMINI_API_KEY", ""),
+                            dimension=dim,
+                        )
+                    else:
+                        logger.info(
+                            f"Initializing shared SentenceTransformerEmbedder ({cfg.embedding_model} on {cfg.embedding_device})"
+                        )
+                        cls._embedder = SentenceTransformerEmbedder(
+                            model_name=cfg.embedding_model,
+                            device=cfg.embedding_device,
+                        )
         return cls._embedder
 
     @classmethod
@@ -54,9 +71,18 @@ class SystemRegistry:
             with cls._lock:
                 if cls._reranker is None:
                     cfg = cls.get_config()
-                    logger.info("Initializing shared CrossEncoderReranker")
-                    cls._reranker = CrossEncoderReranker(model_name=cfg.reranker_model)
+                    logger.info(
+                        f"Initializing shared CrossEncoderReranker ({cfg.reranker_model} on {cfg.reranker_device})"
+                    )
+                    cls._reranker = CrossEncoderReranker(
+                        model_name=cfg.reranker_model,
+                        device=cfg.reranker_device,
+                    )
         return cls._reranker
+
+    @classmethod
+    def get_tier_spec(cls):
+        return cls.get_config().get_tier_spec()
 
     @classmethod
     def get_doc_store(cls) -> DocumentStore:
@@ -80,6 +106,11 @@ class SystemRegistry:
                         api_key=cfg.qdrant_api_key or None,
                         vector_size=embedder.dimension,
                         distance=cfg.qdrant_distance,
+                        hnsw_m=cfg.hnsw_m,
+                        hnsw_ef_construct=cfg.hnsw_ef_construct,
+                        hnsw_full_scan_threshold=cfg.hnsw_full_scan_threshold,
+                        hnsw_on_disk=cfg.hnsw_on_disk,
+                        hnsw_ef_search=cfg.hnsw_ef_search,
                     )
         return cls._qdrant
 

@@ -4,7 +4,7 @@ FREE-TIER / OPEN-SOURCE MODEL CATALOG
 OpenRouter and Groq are filtered using their current provider model/free-plan information.
 Hugging Face is listed separately because its free plan provides monthly inference credits rather than a fixed permanently-free model list.
 
-OPENROUTER — FREE MODELS
+OPENROUTER - FREE MODELS
 ------------------------
 Count: 24
 
@@ -128,7 +128,7 @@ Count: 24
    Context: 32768
    Pricing: {'prompt': '0', 'completion': '0'}
 
-GROQ — FREE PLAN MODELS
+GROQ - FREE PLAN MODELS
 -----------------------
 Count: 12
 
@@ -156,7 +156,7 @@ Count: 12
 
 12. whisper-large-v3-turbo
 
-HUGGING FACE — MODELS ACCESSIBLE THROUGH HF INFERENCE PROVIDERS
+HUGGING FACE - MODELS ACCESSIBLE THROUGH HF INFERENCE PROVIDERS
 ---------------------------------------------------------------
 Count: 143
 

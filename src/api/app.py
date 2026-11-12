@@ -12,7 +12,8 @@ from typing import Any, Dict, Iterator, List, Optional
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from ..components.chunking import ChunkingPipeline
 from ..components.indexing import (
@@ -41,7 +42,8 @@ from .models import (
     SourceReference,
 )
 
-load_dotenv()
+if os.getenv("OFFLINE_EVAL", "").lower() not in ("1", "true", "yes"):
+    load_dotenv()
 cfg = SystemRegistry.get_config()
 configure_json_logging(cfg.log_level)
 logger = logging.getLogger(__name__)
@@ -53,8 +55,8 @@ DEMO_HTML_PATH = Path(__file__).resolve().parents[2] / "demo" / "index.html"
 
 app = FastAPI(
     title="Nexus API",
-    description="Production-Grade, Modular, Evidence-Grounded RAG Platform",
-    version="1.1.0",
+    description="Nexus: Production-Grade, Adaptive, Evidence-Grounded RAG Platform",
+    version="1.2.0",
 )
 
 allowed_origins = [o.strip() for o in cfg.allowed_origins.split(",") if o.strip()] or ["*"]
@@ -65,6 +67,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+FRONTEND_DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+if FRONTEND_DIST_DIR.exists():
+    assets_dir = FRONTEND_DIST_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 
 @app.middleware("http")
@@ -134,14 +147,17 @@ state = SystemState()
 
 
 @app.get("/", include_in_schema=False)
-def root() -> Dict[str, str]:
-    return {
-        "service": "Nexus API",
-        "health": "/health",
-        "ready": "/ready",
-        "demo": "/demo",
-        "docs": "/docs",
-    }
+def root():
+    if FRONTEND_DIST_DIR.exists():
+        return FileResponse(FRONTEND_DIST_DIR / "index.html")
+    if STATIC_DIR.exists() and (STATIC_DIR / "index.html").exists():
+        return FileResponse(STATIC_DIR / "index.html")
+    if DEMO_HTML_PATH.exists():
+        return HTMLResponse(DEMO_HTML_PATH.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        "<!doctype html><html><head><title>Nexus API</title></head>"
+        "<body><h1>Nexus API</h1><p>Docs at <a href='/docs'>/docs</a>.</p></body></html>"
+    )
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -260,7 +276,11 @@ def query_stream(request: QueryRequest, http_request: Request) -> StreamingRespo
     return StreamingResponse(
         _event_generator(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )
 
 

@@ -35,9 +35,14 @@ def main():
     print("\n[1/4] Initializing RAGAS Judge (qwen/qwen3.8-27b on Groq)...")
     client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
     ragas_llm = llm_factory("qwen/qwen3.8-27b", client=client)
+    if hasattr(ragas_llm, "model_args") and isinstance(ragas_llm.model_args, dict):
+        ragas_llm.model_args["max_tokens"] = 850  # Enforce Groq on-demand OTPM limit (< 1000) while allowing full output
 
     print("[2/4] Initializing local HuggingFace embeddings...")
-    hf_emb = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    hf_emb = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs={"local_files_only": True},
+    )
     ragas_emb = LangchainEmbeddingsWrapper(hf_emb)
 
     # 2. Initialize orchestrator and dataset
@@ -52,8 +57,8 @@ def main():
         vecs = orchestrator.embedder.embed_texts([c.text for c in loaded_chunks])
         orchestrator.qdrant.upsert_chunks(loaded_chunks, vecs)
 
-    # Select 5 distinct validation cases
-    target_ids = ["exact_01", "exact_02", "conceptual_01", "comparison_01", "false_premise_01"]
+    # Select 5 distinct validation cases covering different categories
+    target_ids = ["exact_01", "exact_02", "conc_01", "comp_01", "hop_01"]
     cases = [c for c in builder.cases if c.query_id in target_ids]
 
     samples = []
@@ -102,8 +107,10 @@ def main():
         })
         time.sleep(1.0)  # Gentle spacing to avoid hitting RPM rate limits
 
-    # Evaluate official RAGAS metrics
+    # Evaluate official RAGAS metrics with serialized execution (max_workers=1) to respect Groq rate limits
     print("\nRunning official RAGAS judge (AnswerCorrectness + Faithfulness)...")
+    from ragas.run_config import RunConfig
+    run_cfg = RunConfig(max_workers=1, timeout=90, max_retries=5, max_wait=60)
     eval_dataset = EvaluationDataset(samples=samples)
     metrics_to_run = [AnswerCorrectness(), Faithfulness()]
     ragas_results = evaluate(
@@ -111,6 +118,7 @@ def main():
         metrics=metrics_to_run,
         llm=ragas_llm,
         embeddings=ragas_emb,
+        run_config=run_cfg,
     )
 
     print("\n" + "=" * 80)

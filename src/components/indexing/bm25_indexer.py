@@ -156,3 +156,14 @@ class BM25Indexer:
 
     def count(self) -> int:
         return len(self._all_chunks)
+
+    def clear(self) -> None:
+        """Clear all indexed chunks from memory and disk."""
+        self._all_chunks = []
+        self._save_disk_chunks()
+        self.retriever.build_from_chunks([])
+        try:
+            from ..cache import CacheManager
+            CacheManager.get_instance().bump_index_version()
+        except Exception:
+            pass

@@ -28,13 +28,19 @@ def decompose_query(query: str) -> List[str]:
             f"Comparison and differences between {term_a} and {term_b}",
         ]
 
-    # Check for conjunction: "..., and how does ..., and when should ..."
-    parts = re.split(r",\s*and\s+|\s+and\s+how\s+|\s+and\s+when\s+|\s+and\s+why\s+", q, flags=re.IGNORECASE)
-    if len(parts) > 1 and all(len(p.strip()) > 10 for p in parts):
+    # Check for conjunction: "..., and how does ...", "and her ...", "and his ...", "and what ..."
+    parts = re.split(
+        r",\s*and\s+|\s+and\s+(?:how|when|why|where|what|who|which|her|his|their|its|the)\s+",
+        q,
+        flags=re.IGNORECASE,
+    )
+    if len(parts) > 1 and all(len(p.strip()) > 8 for p in parts):
         sub_queries = []
         for p in parts:
             p_clean = p.strip(" ?.")
-            if not re.match(r"^(what|how|why|when|where|who)\b", p_clean, re.I):
+            # Remove hypothetical conditionals like "if my future wife has ..."
+            p_clean = re.sub(r"^(?:if\s+[\w\s]+?\s+has\s+)", "", p_clean, flags=re.I).strip()
+            if not re.match(r"^(what|how|why|when|where|who|which)\b", p_clean, re.I):
                 p_clean = f"What is {p_clean}"
             sub_queries.append(f"{p_clean}?")
         return sub_queries

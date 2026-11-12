@@ -7,27 +7,33 @@ import {
   Menu, MessageSquareText, MoreHorizontal, Network, PanelLeftClose, Plus,
   RefreshCw, Search, Send, Settings2, ShieldCheck, SlidersHorizontal,
   Sparkles, X, Zap, CircleAlert, BarChart3, Command, Upload, ExternalLink,
-  GitBranch, HardDrive, Server, SearchCheck, Workflow, FileSearch
+  GitBranch, HardDrive, Server, SearchCheck, Workflow, FileSearch, Trash2, Download
 } from 'lucide-react';
+
+function GithubIcon({ size = 16, className = '' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
+      <path d="M9 18c-4.51 2-5-2-7-2" />
+    </svg>
+  );
+}
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis
 } from 'recharts';
 import './styles.css';
 
-const API_BASE_DEFAULT = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
+const API_BASE_DEFAULT = (import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8000').replace(/\/$/, '');
 const REPO_URL = 'https://github.com/yashvasudeva1/Production-oriented-adaptive-RAG';
 const DEMO_DOCS = [
-  {id:'doc-001',name:'Transformer Architecture Notes.pdf',type:'PDF',chunks:42,status:'INDEXED',size:'2.4 MB',updated:'Today, 10:42'},
-  {id:'doc-002',name:'Retrieval Systems — Design Review.md',type:'MD',chunks:28,status:'INDEXED',size:'86 KB',updated:'Today, 09:18'},
-  {id:'doc-003',name:'Model Evaluation Handbook.pdf',type:'PDF',chunks:64,status:'INDEXED',size:'5.1 MB',updated:'Yesterday'},
-  {id:'doc-004',name:'Internal API Reference.md',type:'MD',chunks:31,status:'INDEXED',size:'112 KB',updated:'Oct 15'},
-  {id:'doc-005',name:'Research Notes — RAG.pdf',type:'PDF',chunks:55,status:'INDEXED',size:'3.6 MB',updated:'Oct 14'},
+  {id:'doc_d87d482d5ae7960e2e43',name:'Attention Is All You Need.pdf',type:'PDF',chunks:60,status:'INDEXED',size:'569 KB',updated:'Indexed'},
 ];
 const DEMO_QUESTIONS = [
-  'How does the system decide when to rerank?',
-  'Compare dense retrieval with BM25 for exact technical identifiers.',
-  'What safeguards prevent unsupported answers?',
+  'How many attention heads does the base model use?',
+  'What is the Transformer architecture and self-attention mechanism?',
+  'What are the dimensions of d_model and d_k in the paper?',
+  'What BLEU score did the Transformer achieve on English-to-German translation?',
 ];
 const BENCH = {
   cases:110, mrr:0.789, recall:0.8556, precision:0.575, hitRate:0.844, ndcg:0.7723,
@@ -47,9 +53,9 @@ const latencyTrend = [
   {t:'12:00',retrieval:8.5,total:854},{t:'16:00',retrieval:6.9,total:731},{t:'20:00',retrieval:7.8,total:799},{t:'Now',retrieval:6.4,total:784},
 ];
 
-const fmt = (v, digits=1) => Number.isFinite(Number(v)) ? Number(v).toFixed(digits) : '—';
+const fmt = (v, digits=1) => Number.isFinite(Number(v)) ? Number(v).toFixed(digits) : '-';
 const pct = (v, digits=1) => `${fmt(Number(v)*100, digits)}%`;
-const safeText = (v, fallback='—') => v === undefined || v === null || v === '' ? fallback : String(v);
+const safeText = (v, fallback='-') => v === undefined || v === null || v === '' ? fallback : String(v);
 
 function IconButton({children,label,onClick,className='',title}) {
   return <button className={`icon-button ${className}`} type="button" aria-label={label} title={title || label} onClick={onClick}>{children}</button>;
@@ -71,6 +77,42 @@ function App() {
   const [docsLoading,setDocsLoading] = useState(false);
   const [showLibrary,setShowLibrary] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
+  const [settingsTab,setSettingsTab] = useState('telemetry');
+  const [queryHistory,setQueryHistory] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nexus_query_history');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [
+      {
+        id: 'sample-1',
+        time: 'Recent',
+        query: 'How many attention heads does the base model use?',
+        mode: 'adaptive',
+        route: 'fast',
+        query_type: 'fact',
+        confidence: 0.65,
+        abstained: false,
+        latency_ms: 24.5,
+        sources: [
+          { citation_id: 1, chunk_id: 'chk_b4186bd0e50776d7', filename: 'Attention_Is_All_You_Need.pdf', page: 9, section: 'Model Variations', snippet: 'In Table 3 rows (A), we vary the number of attention heads...' },
+          { citation_id: 2, chunk_id: 'chk_8b20a8b1516452ec', filename: 'Attention_Is_All_You_Need.pdf', page: 5, section: '3.2.2 Multi-Head Attention', snippet: 'In this work we employ h = 8 parallel attention layers, or heads. For each of these we use dk = dv = dmodel/h = 64.' }
+        ],
+        retrieval: {
+          execution_mode: 'fast',
+          cascade_stages_executed: ['fast_bm25'],
+          latency_breakdown_ms: { planning_ms: 0.8, fast_retrieval_ms: 6.2, confidence_ms: 0.9, rerank_ms: 0.0, generation_ms: 16.6 },
+          confidence_signals: { term_coverage: 0.67, agreement_ratio: 0.0, score_margin: 0.28, id_ratio: 0.0 }
+        },
+        answer: 'The base model uses 8 attention heads. [2]'
+      }
+    ];
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('nexus_query_history', JSON.stringify(queryHistory.slice(0, 100)));
+    } catch {}
+  }, [queryHistory]);
   const [apiBase,setApiBase] = useState(API_BASE_DEFAULT);
   const [apiDraft,setApiDraft] = useState(API_BASE_DEFAULT);
   const [connectionChecked,setConnectionChecked] = useState(false);
@@ -108,7 +150,7 @@ function App() {
       try {
         const d = await request('/documents').then(r=>r.json());
         const list = Array.isArray(d) ? d : (d.documents || d.items || []);
-        if (list.length) setDocs(list.map((x,i)=>({id:x.document_id||x.id||`doc-${i}`,name:x.filename||x.name||'Untitled document',type:(x.filename||x.name||'FILE').split('.').pop().toUpperCase(),chunks:x.chunk_count||x.chunks_count||0,status:x.status||'INDEXED',size:x.size||'—',updated:x.updated_at||'—'})));
+        if (list.length) setDocs(list.map((x,i)=>({id:x.document_id||x.id||`doc-${i}`,name:x.filename||x.name||'Untitled document',type:(x.filename||x.name||'FILE').split('.').pop().toUpperCase(),chunks:x.chunk_count||x.chunks_count||0,status:x.status||'INDEXED',size:x.size||'-',updated:x.updated_at||'-'})));
       } catch { /* Document endpoint paths can vary by deployed version; health/metrics remain useful. */ }
       if (!quiet) setNotice('Connected to the live RAG API.');
       return true;
@@ -137,7 +179,26 @@ function App() {
         for(const eventChunk of events){const line=eventChunk.split('\n').find(l=>l.startsWith('data: '));if(!line)continue;let data;try{data=JSON.parse(line.slice(6))}catch{continue}
           if(data.event==='retrieval'){current={...current,confidence:data.confidence,execution_mode:data.execution_mode,query_type:data.query_type,retrieval:{...(current.retrieval||{}),latency_retrieval_ms:data.latency_retrieval_ms}};}
           else if(data.event==='delta'){current={...current,answer:current.answer+(data.text||'')};}
-          else if(data.event==='done'){current={...current,...data};}
+          else if(data.event==='done'){
+            current={...current,...data};
+            const rec = {
+              id: `tr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+              query: prompt,
+              mode,
+              route: (data.retrieval?.execution_mode || data.execution_mode || current.execution_mode || mode),
+              query_type: (data.retrieval?.query_type || data.query_type || 'fact'),
+              confidence: data.confidence ?? current.confidence,
+              abstained: Boolean(data.abstained),
+              abstention_reason: data.abstention_reason,
+              latency_ms: data.latency_ms,
+              sources: data.sources || [],
+              retrieval: data.retrieval || {},
+              citation_validation: data.citation_validation,
+              answer: data.answer || current.answer || '',
+            };
+            setQueryHistory(prev => [rec, ...prev.filter(r => r.id !== rec.id)]);
+          }
           else if(data.event==='error'){throw new Error(data.detail||'Query failed');}
           if(runId===runCounter.current)setAnswer({...current});
         }
@@ -176,9 +237,9 @@ function App() {
       <div className="nav-section-label nav-section-spaced">SYSTEM</div>
       <nav className="main-nav">
         <button className="nav-item" onClick={()=>setShowSettings(true)}><Settings2 size={17}/><span>API & settings</span></button>
-        <a className="nav-item nav-link" href={REPO_URL} target="_blank" rel="noreferrer"><GitBranch size={17}/><span>View source code</span><ExternalLink size={13} className="nav-external"/></a>
+        <a className="nav-item nav-link" href={REPO_URL} target="_blank" rel="noreferrer"><GithubIcon size={17}/><span>View source code</span><ExternalLink size={13} className="nav-external"/></a>
       </nav>
-      <div className="sidebar-bottom"><div className="connection-card"><div className="connection-heading"><span className={`status-dot ${isLive?'online':'offline'}`}/><b>{isLive?'API connected':'Preview mode'}</b><button className="plain-icon" aria-label="Refresh connection" onClick={()=>refreshOverview()}><RefreshCw size={13}/></button></div><p>{isLive?`${safeText(health?.chunk_count,'—')} indexed chunks available`:'Connect your FastAPI backend to run live queries.'}</p><button className="connection-action" onClick={()=>setShowSettings(true)}>{isLive?'Configure connection':'Connect API'}<ArrowUpRight size={14}/></button></div><div className="profile-row"><div className="profile-avatar">Y</div><div className="profile-copy"><b>Yash Vasudeva</b><span>Developer</span></div><MoreHorizontal size={18} className="muted-icon"/></div></div>
+      <div className="sidebar-bottom"><div className="connection-card"><div className="connection-heading"><span className={`status-dot ${isLive?'online':'offline'}`}/><b>{isLive?'API connected':'Preview mode'}</b><button className="plain-icon" aria-label="Refresh connection" onClick={()=>refreshOverview()}><RefreshCw size={13}/></button></div><p>{isLive?`${safeText(health?.chunk_count,'-')} indexed chunks available`:'Connect your FastAPI backend to run live queries.'}</p><button className="connection-action" onClick={()=>setShowSettings(true)}>{isLive?'Configure connection':'Connect API'}<ArrowUpRight size={14}/></button></div><div className="profile-row"><div className="profile-avatar">Y</div><div className="profile-copy"><b>Yash Vasudeva</b><span>Developer</span></div><MoreHorizontal size={18} className="muted-icon"/></div></div>
     </aside>
     {mobileNav&&<button className="mobile-scrim" aria-label="Close navigation" onClick={()=>setMobileNav(false)}/>}
     <main className="main-panel">
@@ -191,10 +252,340 @@ function App() {
       </div>
       <footer className="app-footer"><span>Nexus <span className="footer-dot">·</span> Adaptive retrieval, grounded answers</span><span><span className={`status-dot ${isLive?'online':'offline'}`}/>{isLive?'Connected to backend':'Demo data · Not connected'}</span></footer>
     </main>
-    {showSettings&&<div className="modal-scrim" onMouseDown={e=>e.target===e.currentTarget&&setShowSettings(false)}><section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div className="modal-header"><div><div className="eyebrow">CONFIGURATION</div><h2 id="settings-title">API connection</h2></div><IconButton label="Close settings" onClick={()=>setShowSettings(false)}><X size={18}/></IconButton></div><p className="modal-intro">Connect this interface to your running FastAPI service. For local development, the default Vite proxy is not configured: enter your backend origin and enable CORS or add a proxy in <code>vite.config.js</code>.</p><form onSubmit={saveApiSettings}><label className="field-label" htmlFor="api-url">Backend base URL</label><input className="text-input" id="api-url" placeholder="http://localhost:8000" value={apiDraft} onChange={e=>setApiDraft(e.target.value)}/><div className="field-hint">Leave blank to use the built-in preview. The UI expects endpoints such as <code>/health</code>, <code>/metrics/json</code>, and <code>/query/stream</code>.</div><div className="modal-actions"><button type="button" className="button button-secondary" onClick={()=>{setApiDraft('');setApiBase('');setShowSettings(false);setConnectionChecked(false);setNotice('Switched to preview mode.')}}>Use preview</button><button type="submit" className="button button-primary">Save & connect<ArrowRight size={15}/></button></div></form><div className="settings-divider"/><div className="setup-links"><a href={`${apiDraft.replace(/\/$/,'')||'http://localhost:8000'}/docs`} target="_blank" rel="noreferrer"><FileText size={15}/>Open API docs <ExternalLink size={12}/></a><a href={REPO_URL} target="_blank" rel="noreferrer"><GitBranch size={15}/>Repository <ExternalLink size={12}/></a></div></section></div>}
+    <SettingsModal
+      showSettings={showSettings}
+      setShowSettings={setShowSettings}
+      settingsTab={settingsTab}
+      setSettingsTab={setSettingsTab}
+      queryHistory={queryHistory}
+      setQueryHistory={setQueryHistory}
+      apiDraft={apiDraft}
+      setApiDraft={setApiDraft}
+      saveApiSettings={saveApiSettings}
+      setApiBase={setApiBase}
+      setConnectionChecked={setConnectionChecked}
+      setNotice={setNotice}
+    />
     {showLibrary&&<div className="modal-scrim" onMouseDown={e=>e.target===e.currentTarget&&setShowLibrary(false)}><section className="settings-modal library-modal" role="dialog" aria-modal="true"><div className="modal-header"><div><div className="eyebrow">KNOWLEDGE BASE</div><h2>Document library</h2></div><IconButton label="Close library" onClick={()=>setShowLibrary(false)}><X size={18}/></IconButton></div><LibraryPage docs={docs} setDocs={setDocs} totalDocs={totalDocs} totalChunks={totalChunks} isLive={isLive} fileRef={fileRef} uploadFiles={uploadFiles} uploadBusy={uploadBusy} selectedDoc={selectedDoc} setSelectedDoc={setSelectedDoc} apiBase={apiBase}/></section></div>}
     {notice&&<div className="toast" role="status"><CheckCircle2 size={16}/><span>{notice}</span><button className="plain-icon" aria-label="Dismiss notification" onClick={()=>setNotice('')}><X size={14}/></button></div>}
   </div>;
+}
+
+function SettingsModal({
+  showSettings, setShowSettings, settingsTab, setSettingsTab,
+  queryHistory, setQueryHistory, apiDraft, setApiDraft, saveApiSettings, setApiBase, setConnectionChecked, setNotice
+}) {
+  const [selectedRecord, setSelectedRecord] = useState(queryHistory[0] || null);
+  const [filter, setFilter] = useState('All');
+
+  // Keep selected record valid when history updates
+  useEffect(() => {
+    if (!selectedRecord && queryHistory.length > 0) {
+      setSelectedRecord(queryHistory[0]);
+    }
+  }, [queryHistory]);
+
+  const filteredHistory = useMemo(() => {
+    return queryHistory.filter(item => {
+      if (filter === 'All') return true;
+      if (filter === 'Abstained') return item.abstained;
+      return (item.route || item.mode || '').toLowerCase() === filter.toLowerCase();
+    });
+  }, [queryHistory, filter]);
+
+  const totalQueries = queryHistory.length;
+  const avgLatency = totalQueries ? (queryHistory.reduce((acc, q) => acc + (q.latency_ms || 0), 0) / totalQueries) : 0;
+  const avgChunks = totalQueries ? (queryHistory.reduce((acc, q) => acc + (q.sources?.length || 0), 0) / totalQueries) : 0;
+  const fastShare = totalQueries ? ((queryHistory.filter(q => (q.route || '').toLowerCase() === 'fast').length / totalQueries) * 100) : 0;
+
+  function clearHistory() {
+    setQueryHistory([]);
+    setSelectedRecord(null);
+  }
+
+  function exportHistory() {
+    const blob = new Blob([JSON.stringify(queryHistory, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `nexus-query-telemetry-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  if (!showSettings) return null;
+
+  return (
+    <div className="modal-scrim" onMouseDown={e => e.target === e.currentTarget && setShowSettings(false)}>
+      <section className={`settings-modal ${settingsTab === 'telemetry' ? 'telemetry-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div className="settings-tabs-header">
+          <div className="settings-tab-nav">
+            <button
+              type="button"
+              className={`settings-tab-btn ${settingsTab === 'telemetry' ? 'active' : ''}`}
+              onClick={() => setSettingsTab('telemetry')}
+            >
+              <Activity size={15} />
+              <span>Query Monitor & Telemetry</span>
+              <span className="tab-badge">{queryHistory.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`settings-tab-btn ${settingsTab === 'api' ? 'active' : ''}`}
+              onClick={() => setSettingsTab('api')}
+            >
+              <Server size={15} />
+              <span>API Connection</span>
+            </button>
+          </div>
+          <IconButton label="Close settings" onClick={() => setShowSettings(false)}>
+            <X size={18} />
+          </IconButton>
+        </div>
+
+        {settingsTab === 'api' ? (
+          <div>
+            <div className="modal-header">
+              <div>
+                <div className="eyebrow">CONFIGURATION</div>
+                <h2 id="settings-title">API connection</h2>
+              </div>
+            </div>
+            <p className="modal-intro">
+              Connect this interface to your running FastAPI service. For local development, the default Vite proxy is not configured: enter your backend origin and enable CORS or add a proxy in <code>vite.config.js</code>.
+            </p>
+            <form onSubmit={saveApiSettings}>
+              <label className="field-label" htmlFor="api-url">Backend base URL</label>
+              <input
+                className="text-input"
+                id="api-url"
+                placeholder="http://localhost:8000"
+                value={apiDraft}
+                onChange={e => setApiDraft(e.target.value)}
+              />
+              <div className="field-hint">
+                Leave blank to use the built-in preview. The UI expects endpoints such as <code>/health</code>, <code>/metrics/json</code>, and <code>/query/stream</code>.
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={() => {
+                    setApiDraft('');
+                    setApiBase('');
+                    setShowSettings(false);
+                    setConnectionChecked(false);
+                    setNotice('Switched to preview mode.');
+                  }}
+                >
+                  Use preview
+                </button>
+                <button type="submit" className="button button-primary">
+                  Save & connect<ArrowRight size={15} />
+                </button>
+              </div>
+            </form>
+            <div className="settings-divider" />
+            <div className="setup-links">
+              <a href={`${apiDraft.replace(/\/$/, '') || 'http://localhost:8000'}/docs`} target="_blank" rel="noreferrer">
+                <FileText size={15} />Open API docs <ExternalLink size={12} />
+              </a>
+              <a href={REPO_URL} target="_blank" rel="noreferrer">
+                <GithubIcon size={15} />Repository <ExternalLink size={12} />
+              </a>
+            </div>
+          </div>
+        ) : (
+          <div className="telemetry-content">
+            <div className="telemetry-kpi-grid">
+              <div className="telemetry-kpi-card">
+                <span className="telemetry-kpi-label">Queries Logged</span>
+                <span className="telemetry-kpi-val">{totalQueries}</span>
+                <span className="telemetry-kpi-sub">Tracked in session</span>
+              </div>
+              <div className="telemetry-kpi-card">
+                <span className="telemetry-kpi-label">Avg Latency</span>
+                <span className="telemetry-kpi-val">{fmt(avgLatency, 0)} <small>ms</small></span>
+                <span className="telemetry-kpi-sub">End-to-end total</span>
+              </div>
+              <div className="telemetry-kpi-card">
+                <span className="telemetry-kpi-label">Avg Chunks</span>
+                <span className="telemetry-kpi-val">{fmt(avgChunks, 1)}</span>
+                <span className="telemetry-kpi-sub">Passages fetched / query</span>
+              </div>
+              <div className="telemetry-kpi-card">
+                <span className="telemetry-kpi-label">Fast Path Share</span>
+                <span className="telemetry-kpi-val">{fmt(fastShare, 1)}%</span>
+                <span className="telemetry-kpi-sub">BM25 fast route</span>
+              </div>
+            </div>
+
+            <div className="telemetry-toolbar">
+              <div className="telemetry-filters">
+                {['All', 'Fast', 'Balanced', 'Deep', 'Abstained'].map(f => (
+                  <button
+                    key={f}
+                    type="button"
+                    className={`telemetry-filter-btn ${filter === f ? 'active' : ''}`}
+                    onClick={() => setFilter(f)}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="button button-secondary button-small"
+                  onClick={exportHistory}
+                  disabled={!queryHistory.length}
+                >
+                  <Download size={13} /> Export JSON
+                </button>
+                <button
+                  type="button"
+                  className="button button-secondary button-small"
+                  onClick={clearHistory}
+                  disabled={!queryHistory.length}
+                >
+                  <Trash2 size={13} /> Clear
+                </button>
+              </div>
+            </div>
+
+            <div className="telemetry-table-container">
+              <table className="telemetry-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Query</th>
+                    <th>Route</th>
+                    <th>Latency</th>
+                    <th>Chunks</th>
+                    <th>Conf</th>
+                    <th>Verdict</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredHistory.length > 0 ? (
+                    filteredHistory.map(row => (
+                      <tr
+                        key={row.id}
+                        className={selectedRecord?.id === row.id ? 'selected' : ''}
+                        onClick={() => setSelectedRecord(row)}
+                      >
+                        <td style={{ whiteSpace: 'nowrap', color: '#888' }}>{row.time || '-'}</td>
+                        <td style={{ fontWeight: 600, maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {row.query}
+                        </td>
+                        <td>
+                          <span className={`mode-badge ${(row.route || row.mode || 'adaptive').toLowerCase()}`}>
+                            {(row.route || row.mode || 'adaptive').toUpperCase()}
+                          </span>
+                        </td>
+                        <td style={{ fontFamily: 'monospace' }}>{fmt(row.latency_ms, 1)} ms</td>
+                        <td>{row.sources?.length ?? 0}</td>
+                        <td style={{ fontFamily: 'monospace' }}>{row.confidence != null ? fmt(row.confidence, 2) : '-'}</td>
+                        <td>
+                          <Tag tone={row.abstained ? 'amber' : 'green'} dot>
+                            {row.abstained ? 'Abstained' : 'Grounded'}
+                          </Tag>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="7" style={{ textAlign: 'center', padding: '24px', color: '#999' }}>
+                        No query traces match this filter. Run a query in Workspace to see live telemetry!
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {selectedRecord && (
+              <div className="telemetry-detail-view">
+                <div className="detail-header">
+                  <div>
+                    <span className="eyebrow">QUERY INSPECTOR</span>
+                    <h3 style={{ margin: '4px 0', fontSize: '13px' }}>"{selectedRecord.query}"</h3>
+                    <p style={{ margin: 0, fontSize: '10px', color: '#777' }}>
+                      Route: <b>{(selectedRecord.route || selectedRecord.mode || 'adaptive').toUpperCase()}</b> · Intent: <b>{selectedRecord.query_type || 'fact'}</b> · Gate: <b>{selectedRecord.abstained ? 'Abstained' : 'Passed'}</b>
+                      {selectedRecord.abstention_reason && ` (${selectedRecord.abstention_reason})`}
+                    </p>
+                  </div>
+                  <Tag tone={selectedRecord.abstained ? 'amber' : 'green'} dot>
+                    {selectedRecord.abstained ? 'ABSTAINED' : 'EVIDENCE GROUNDED'}
+                  </Tag>
+                </div>
+
+                <div>
+                  <span className="stat-label" style={{ marginBottom: '6px', display: 'block' }}>STAGE LATENCY BREAKDOWN (MS)</span>
+                  <div className="detail-timing-grid">
+                    <div className="detail-timing-box">
+                      <span className="timing-name">Query Planning</span>
+                      <span className="timing-val">{fmt(selectedRecord.retrieval?.latency_breakdown_ms?.planning_ms ?? selectedRecord.retrieval?.latency_breakdown_ms?.query_planning_ms, 1)} ms</span>
+                    </div>
+                    <div className="detail-timing-box">
+                      <span className="timing-name">{selectedRecord.route === 'fast' ? 'Fast BM25 Retrieval' : 'Hybrid Retrieval'}</span>
+                      <span className="timing-val">{fmt(selectedRecord.retrieval?.latency_breakdown_ms?.hybrid_retrieval_ms ?? selectedRecord.retrieval?.latency_breakdown_ms?.fast_retrieval_ms, 1)} ms</span>
+                    </div>
+                    <div className="detail-timing-box">
+                      <span className="timing-name">Fusion & Confidence</span>
+                      <span className="timing-val">{fmt(selectedRecord.retrieval?.latency_breakdown_ms?.fusion_ms ?? selectedRecord.retrieval?.latency_breakdown_ms?.confidence_ms, 1)} ms</span>
+                    </div>
+                    <div className="detail-timing-box">
+                      <span className="timing-name">Cross-Encoder Rerank</span>
+                      <span className="timing-val">{fmt(selectedRecord.retrieval?.latency_breakdown_ms?.rerank_ms, 1)} ms</span>
+                    </div>
+                    <div className="detail-timing-box">
+                      <span className="timing-name">Parent Expansion</span>
+                      <span className="timing-val">{fmt(selectedRecord.retrieval?.latency_breakdown_ms?.parent_expansion_ms, 1)} ms</span>
+                    </div>
+                    <div className="detail-timing-box">
+                      <span className="timing-name">Token Generation</span>
+                      <span className="timing-val">{fmt(selectedRecord.retrieval?.latency_breakdown_ms?.generation_ms, 1)} ms</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <span className="stat-label" style={{ marginBottom: '6px', display: 'block' }}>
+                    RETRIEVED CHUNKS & EVIDENCE ({selectedRecord.sources?.length ?? 0} CHUNKS FETCHED)
+                  </span>
+                  <div className="detail-chunks-list">
+                    {selectedRecord.sources?.length ? (
+                      selectedRecord.sources.map((s, idx) => (
+                        <div className="detail-chunk-card" key={s.chunk_id || idx}>
+                          <div className="detail-chunk-top">
+                            <span>[{s.citation_id || idx + 1}] {s.filename || s.document_id || 'Document'}</span>
+                            <span style={{ fontFamily: 'monospace', color: '#1d4ed8' }}>
+                              {s.page ? `Page ${s.page}` : ''} {s.section ? `· ${s.section}` : ''}
+                            </span>
+                          </div>
+                          <p className="detail-chunk-snippet">{s.snippet || 'Snippet not available.'}</p>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: '#888', marginTop: '4px' }}>
+                            <span>Chunk ID: {s.chunk_id || '-'}</span>
+                            {s.score != null && <span>Score: {fmt(s.score, 4)}</span>}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="empty-state small-empty">
+                        <FileSearch size={18} />
+                        <b>No candidate chunks retained</b>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+    </div>
+  );
 }
 
 function WorkspacePage({query,setQuery,mode,setMode,busy,answer,error,runQuery,queryRef,docs,totalDocs,totalChunks,isLive,setPage,setShowLibrary}) {
@@ -210,11 +601,148 @@ function WorkspacePage({query,setQuery,mode,setMode,busy,answer,error,runQuery,q
   </div>;
 }
 
+function renderInlineContent(text, onCitationClick) {
+  if (!text) return null;
+  const tokens = [];
+  const regex = /(\[\d+\])|(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)/g;
+  let lastIndex = 0;
+  let match;
+  let keyIdx = 0;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      tokens.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith('[') && token.endsWith(']')) {
+      const num = token.slice(1, -1);
+      tokens.push(
+        <button
+          key={`cit-${keyIdx++}`}
+          type="button"
+          className="citation-badge"
+          onClick={() => onCitationClick?.(num)}
+          title={`View source [${num}]`}
+        >
+          [{num}]
+        </button>
+      );
+    } else if (token.startsWith('`') && token.endsWith('`')) {
+      tokens.push(
+        <code key={`code-${keyIdx++}`} className="inline-code">
+          {token.slice(1, -1)}
+        </code>
+      );
+    } else if (token.startsWith('**') && token.endsWith('**')) {
+      tokens.push(
+        <strong key={`bold-${keyIdx++}`}>
+          {token.slice(2, -2)}
+        </strong>
+      );
+    } else if (token.startsWith('*') && token.endsWith('*')) {
+      tokens.push(
+        <em key={`em-${keyIdx++}`}>
+          {token.slice(1, -1)}
+        </em>
+      );
+    }
+    lastIndex = match.index + token.length;
+  }
+  if (lastIndex < text.length) {
+    tokens.push(text.slice(lastIndex));
+  }
+  return tokens;
+}
+
+function FormattedAnswer({ text, onCitationClick }) {
+  if (!text) return null;
+
+  // Clean raw LaTeX boxed if any: \boxed{8} -> **8**
+  let cleanText = text.replace(/\\boxed\{([^}]+)\}/g, '**$1**');
+  // Replace em-dashes with -
+  cleanText = cleanText.replace(/-/g, '-');
+
+  const blocks = cleanText.split(/\n\s*\n/);
+
+  return (
+    <div className="answer-formatted">
+      {blocks.map((block, bIdx) => {
+        const trimmed = block.trim();
+        if (!trimmed) return null;
+
+        // Code block
+        if (trimmed.startsWith('```') && trimmed.endsWith('```')) {
+          const lines = trimmed.split('\n');
+          const code = lines.slice(1, -1).join('\n');
+          return (
+            <pre key={bIdx} className="answer-code-block">
+              <code>{code}</code>
+            </pre>
+          );
+        }
+
+        // Header: ### or ## or #
+        const hMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
+        if (hMatch) {
+          return (
+            <h4 key={bIdx} className="answer-heading">
+              {renderInlineContent(hMatch[2], onCitationClick)}
+            </h4>
+          );
+        }
+
+        // Bullet list
+        const lines = trimmed.split('\n');
+        const isBulletList = lines.length > 0 && lines.every(l => /^\s*[-*•]\s+/.test(l));
+        if (isBulletList) {
+          return (
+            <ul key={bIdx} className="answer-ul">
+              {lines.map((l, lIdx) => {
+                const itemText = l.replace(/^\s*[-*•]\s+/, '');
+                return (
+                  <li key={lIdx} className="answer-li">
+                    {renderInlineContent(itemText, onCitationClick)}
+                  </li>
+                );
+              })}
+            </ul>
+          );
+        }
+
+        // Numbered list
+        const isNumberedList = lines.length > 0 && lines.every(l => /^\s*\d+\.\s+/.test(l));
+        if (isNumberedList) {
+          return (
+            <ol key={bIdx} className="answer-ol">
+              {lines.map((l, lIdx) => {
+                const itemText = l.replace(/^\s*\d+\.\s+/, '');
+                return (
+                  <li key={lIdx} className="answer-li">
+                    {renderInlineContent(itemText, onCitationClick)}
+                  </li>
+                );
+              })}
+            </ol>
+          );
+        }
+
+        // Paragraph
+        const pText = lines.map(l => l.trim()).join(' ');
+        return (
+          <p key={bIdx} className="answer-p">
+            {renderInlineContent(pText, onCitationClick)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 function AnswerPanel({answer,isBusy}) {
   const sources=answer.sources||[];const confidence=answer.confidence;const retrieval=answer.retrieval||{};const breakdown=retrieval.latency_breakdown_ms||{};
   const [tab,setTab]=useState('answer');const [copied,setCopied]=useState(false);
   async function copyAnswer(){try{await navigator.clipboard.writeText(answer.answer||'');setCopied(true);setTimeout(()=>setCopied(false),1400)}catch{setCopied(false)}}
-  return <section className="answer-panel page-enter"><div className="answer-panel-top"><div className="answer-label"><span className="answer-spark"><Sparkles size={14}/></span><span><b>Response</b><small>{isBusy?'Generating answer':'Completed response'}</small></span></div><div className="answer-actions"><Tag tone={answer.abstained?'amber':'green'} dot>{answer.abstained?'Abstained':(answer.citation_validation?.valid===false?'Review citations':'Evidence returned')}</Tag><IconButton label="Copy answer" onClick={copyAnswer}>{copied?<Check size={16}/>:<Copy size={16}/>}</IconButton></div></div><div className="answer-stats"><span><span className="stat-label">ROUTE</span><b>{safeText(answer.execution_mode||retrieval.execution_mode,'Adaptive').toUpperCase()}</b></span><span><span className="stat-label">CONFIDENCE</span><b>{confidence==null?'—':fmt(confidence,2)}</b></span><span><span className="stat-label">LATENCY</span><b>{answer.latency_ms==null?'—':`${fmt(answer.latency_ms,0)} ms`}</b></span><span><span className="stat-label">SOURCES</span><b>{sources.length}</b></span></div><div className="answer-tabs"><button className={tab==='answer'?'active':''} onClick={()=>setTab('answer')}>Answer</button><button className={tab==='sources'?'active':''} onClick={()=>setTab('sources')}>Sources <span>{sources.length}</span></button><button className={tab==='trace'?'active':''} onClick={()=>setTab('trace')}>Execution trace</button></div>{tab==='answer'&&<div className="answer-body">{answer.answer?<p className="answer-text">{answer.answer}</p>:<span className="subtle">Waiting for answer tokens…</span>}{answer.abstention_reason&&<div className="abstention-note"><ShieldCheck size={16}/><div><b>Evidence gate abstention</b><p>{answer.abstention_reason}</p></div></div>}{sources.length>0&&<div className="inline-sources"><span>SUPPORTED BY</span>{sources.map((s,i)=><span key={`${s.citation_id}-${i}`} className="inline-source-chip">[{s.citation_id||i+1}] {s.filename||s.document_id||'Source'}</span>)}</div>}</div>}{tab==='sources'&&<div className="answer-body source-detail-list">{sources.length?sources.map((s,i)=><article className="source-detail" key={`${s.chunk_id||s.document_id}-${i}`}><span className="source-number">[{s.citation_id||i+1}]</span><div><b>{s.filename||s.document_id||'Source document'}</b><p>{s.snippet||'Source returned without a preview snippet.'}</p><small>{[s.page&&`Page ${s.page}`,s.section,s.chunk_id&&`Chunk ${s.chunk_id}`].filter(Boolean).join(' · ')||'Retrieved evidence'}</small></div></article>):<div className="empty-state small-empty"><FileSearch size={21}/><b>No source records returned</b><p>The backend did not attach source references to this answer.</p></div>}</div>}{tab==='trace'&&<div className="answer-body"><div className="trace-list">{[['Query planning',breakdown.planning_ms??breakdown.query_planning_ms],['Hybrid retrieval',breakdown.hybrid_retrieval_ms??breakdown.fast_retrieval_ms],['Fusion & confidence',breakdown.fusion_ms??breakdown.confidence_ms],['Reranking',breakdown.rerank_ms],['Parent expansion',breakdown.parent_expansion_ms],['Generation',breakdown.generation_ms]].map(([name,val],i)=><div className="trace-row" key={name}><span className={`trace-dot ${val==null?'muted':''}`}/><span>{name}</span><b>{val==null?'Not reported':`${fmt(val,1)} ms`}</b></div>)}</div><p className="trace-footnote">Stage timings are shown only when the API returns them. Missing values are not inferred.</p></div>}</section>;
+  return <section className="answer-panel page-enter"><div className="answer-panel-top"><div className="answer-label"><span className="answer-spark"><Sparkles size={14}/></span><span><b>Response</b><small>{isBusy?'Generating answer':'Completed response'}</small></span></div><div className="answer-actions"><Tag tone={answer.abstained?'amber':'green'} dot>{answer.abstained?'Abstained':(answer.citation_validation?.valid===false?'Review citations':'Evidence returned')}</Tag><IconButton label="Copy answer" onClick={copyAnswer}>{copied?<Check size={16}/>:<Copy size={16}/>}</IconButton></div></div><div className="answer-stats"><span><span className="stat-label">ROUTE</span><b>{safeText(answer.execution_mode||retrieval.execution_mode,'Adaptive').toUpperCase()}</b></span><span><span className="stat-label">CONFIDENCE</span><b>{confidence==null?'-':fmt(confidence,2)}</b></span><span><span className="stat-label">LATENCY</span><b>{answer.latency_ms==null?'-':`${fmt(answer.latency_ms,0)} ms`}</b></span><span><span className="stat-label">SOURCES</span><b>{sources.length}</b></span></div><div className="answer-tabs"><button className={tab==='answer'?'active':''} onClick={()=>setTab('answer')}>Answer</button><button className={tab==='sources'?'active':''} onClick={()=>setTab('sources')}>Sources <span>{sources.length}</span></button><button className={tab==='trace'?'active':''} onClick={()=>setTab('trace')}>Execution trace</button></div>{tab==='answer'&&<div className="answer-body">{answer.answer?<FormattedAnswer text={answer.answer} onCitationClick={()=>setTab('sources')}/>:<span className="subtle">Waiting for answer tokens…</span>}{answer.abstention_reason&&<div className="abstention-note"><ShieldCheck size={16}/><div><b>Evidence gate abstention</b><p>{answer.abstention_reason}</p></div></div>}{sources.length>0&&<div className="inline-sources"><span>SUPPORTED BY</span>{sources.map((s,i)=><button key={`${s.citation_id}-${i}`} type="button" className="inline-source-chip" onClick={()=>setTab('sources')} style={{cursor:'pointer'}}> [{s.citation_id||i+1}] {s.filename||s.document_id||'Source'}</button>)}</div>}</div>}{tab==='sources'&&<div className="answer-body source-detail-list">{sources.length?sources.map((s,i)=><article className="source-detail" key={`${s.chunk_id||s.document_id}-${i}`}><span className="source-number">[{s.citation_id||i+1}]</span><div><b>{s.filename||s.document_id||'Source document'}</b><p>{s.snippet||'Source returned without a preview snippet.'}</p><small>{[s.page&&`Page ${s.page}`,s.section,s.chunk_id&&`Chunk ${s.chunk_id}`].filter(Boolean).join(' · ')||'Retrieved evidence'}</small></div></article>):<div className="empty-state small-empty"><FileSearch size={21}/><b>No source records returned</b><p>The backend did not attach source references to this answer.</p></div>}</div>}{tab==='trace'&&<div className="answer-body"><div className="trace-list">{[['Query planning',breakdown.planning_ms??breakdown.query_planning_ms],[breakdown.hybrid_retrieval_ms!=null?'Hybrid retrieval (BM25 + Dense)':'Fast BM25 retrieval',breakdown.hybrid_retrieval_ms??breakdown.fast_retrieval_ms],['Fusion & confidence',breakdown.fusion_ms??breakdown.confidence_ms],['Reranking',breakdown.rerank_ms],['Parent expansion',breakdown.parent_expansion_ms],['Generation',breakdown.generation_ms]].map(([name,val],i)=><div className="trace-row" key={name}><span className={`trace-dot ${val==null?'muted':''}`}/><span>{name}</span><b>{val==null?'Not reported':`${fmt(val,1)} ms`}</b></div>)}</div><p className="trace-footnote">Stage timings are shown only when the API returns them. Missing values are not inferred.</p></div>}</section>;
 }
 
 function MetricsPage({isLive,health,metrics,refreshOverview}) {
@@ -228,7 +756,7 @@ function MetricsPage({isLive,health,metrics,refreshOverview}) {
   ];
   return <div className="metrics-page page-enter"><SectionHeading eyebrow="OBSERVABILITY" title="Pipeline metrics" description="Inspect retrieval quality, latency, routing decisions, and the live service state." action={<div className="heading-actions"><button className="button button-secondary" onClick={refresh} disabled={busy}>{busy?<LoaderCircle size={15} className="spin"/>:<RefreshCw size={15}/>}Refresh status</button><button className="button button-primary" onClick={()=>setRange(range==='Benchmark'?'Live API':'Benchmark')}>{range==='Benchmark'?'View live status':'View benchmark'}<ArrowRight size={15}/></button></div>}/>
     <div className={`data-notice ${isLive?'live-notice':''}`}><span className={`notice-icon ${isLive?'ok':''}`}>{isLive?<CheckCircle2 size={17}/>:<CircleAlert size={17}/>}</span><div><b>{isLive?'Live service connected':'Benchmark data and live status are separate'}</b><p>{isLive?`Health endpoint reports ${safeText(health?.status)}; operational counts below are from this API session.`:'Quality and latency charts show the repository’s recorded benchmark (110 test cases), not current traffic. Connect the API to fetch live health and index counts.'}</p></div><Tag tone={isLive?'green':'amber'}>{isLive?'LIVE HEALTH':'RECORDED BENCHMARK'}</Tag></div>
-    <div className="metric-grid">{(range==='Benchmark'?cards:[{label:'API health',value:isLive?'Healthy':'Offline',detail:'GET /health',icon:Server,accent:isLive?'green':'amber'},{label:'Indexed documents',value:safeText(metrics?.indexed_documents,'—'),detail:'GET /metrics/json',icon:FileText,accent:'blue'},{label:'Qdrant points',value:metrics?.qdrant_points_count==null?'—':Number(metrics.qdrant_points_count).toLocaleString(),detail:'Vector collection size',icon:Database,accent:'green'},{label:'Active jobs',value:safeText(metrics?.active_jobs_count,'—'),detail:'Reported by the API',icon:Activity,accent:'amber'}]).map(c=><MetricCard key={c.label} {...c}/>)}</div>
+    <div className="metric-grid">{(range==='Benchmark'?cards:[{label:'API health',value:isLive?'Healthy':'Offline',detail:'GET /health',icon:Server,accent:isLive?'green':'amber'},{label:'Indexed documents',value:safeText(metrics?.indexed_documents,'-'),detail:'GET /metrics/json',icon:FileText,accent:'blue'},{label:'Qdrant points',value:metrics?.qdrant_points_count==null?'-':Number(metrics.qdrant_points_count).toLocaleString(),detail:'Vector collection size',icon:Database,accent:'green'},{label:'Active jobs',value:safeText(metrics?.active_jobs_count,'-'),detail:'Reported by the API',icon:Activity,accent:'amber'}]).map(c=><MetricCard key={c.label} {...c}/>)}</div>
     <div className="metrics-main-grid"><section className="surface chart-surface"><div className="surface-heading"><div><h3>Latency distribution</h3><p>Full execution · adaptive mode · 110 cases</p></div><span className="chart-legend"><i className="legend-blue"/>Latency (ms)</span></div><div className="latency-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={[{p:'Min',v:2},{p:'P50',v:863.9},{p:'P90',v:1423.8},{p:'P95',v:1504.4},{p:'P99',v:1851},{p:'Max',v:3179.5}]} margin={{top:12,right:8,left:-18,bottom:0}}><defs><linearGradient id="latencyFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3478f6" stopOpacity={0.18}/><stop offset="100%" stopColor="#3478f6" stopOpacity={0.015}/></linearGradient></defs><CartesianGrid stroke="#e9e9ed" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="p" tickLine={false} axisLine={false} tick={{fill:'#8a8a93',fontSize:11}} dy={8}/><YAxis tickLine={false} axisLine={false} tick={{fill:'#8a8a93',fontSize:11}}/><Tooltip content={<ChartTooltip suffix=" ms"/>}/><Area type="monotone" dataKey="v" name="Latency" stroke="#3478f6" strokeWidth={2.4} fill="url(#latencyFill)" activeDot={{r:4,strokeWidth:0}}/></AreaChart></ResponsiveContainer></div><div className="chart-footline"><span>Mean <b>{fmt(BENCH.latency.mean,1)} ms</b></span><span>P95 <b>{fmt(BENCH.latency.p95,1)} ms</b></span><span>Maximum <b>{fmt(BENCH.latency.max,0)} ms</b></span></div><p className="chart-caveat">End-to-end wall-clock timings include generation. Retrieval-only measurements are much lower and are not comparable to this chart.</p></section>
       <section className="surface route-surface"><div className="surface-heading"><div><h3>Adaptive routing</h3><p>Share of benchmark queries</p></div><span className="tiny-pill">110 CASES</span></div><div className="route-bar"><span style={{width:`${BENCH.fast}%`}}/><span style={{width:`${BENCH.balanced}%`}}/><span style={{width:`${BENCH.deep}%`}}/></div><div className="route-legend"><div><i className="route-fast"/><span>Fast path</span><b>{fmt(BENCH.fast)}%</b></div><div><i className="route-balanced"/><span>Balanced path</span><b>{fmt(BENCH.balanced)}%</b></div><div><i className="route-deep"/><span>Deep path</span><b>{fmt(BENCH.deep)}%</b></div></div><div className="route-divider"/><div className="route-stat"><span>Cross-encoder rerank rate</span><b>{fmt(BENCH.rerank)}%</b></div><div className="route-stat"><span>Multi-query rate</span><b>{fmt(BENCH.multiQuery)}%</b></div><div className="route-stat"><span>Early abstention rate</span><b>{fmt(BENCH.abstainRate)}%</b></div><p className="micro-note">Fast path bypasses reranking when confidence crosses the configured threshold. Benchmark fast-path frequency is low; this should remain visible rather than overstated.</p></section></div>
     <section className="surface ablation-surface"><div className="surface-heading"><div><h3>Retrieval configuration comparison</h3><p>Recall and retrieval latency from the repository ablation study</p></div><Tag tone="blue">RETRIEVAL ONLY</Tag></div><div className="ablation-table-wrap"><table className="data-table"><thead><tr><th>Configuration</th><th>Recall @ 5</th><th>P50 latency</th><th>P95 latency</th><th>Interpretation</th></tr></thead><tbody>{BENCH_SERIES.map((row,i)=><tr key={row.label}><td><span className={`table-rank rank-${i}`}>{String.fromCharCode(65+i)}</span><b>{row.label}</b></td><td><div className="table-bar-cell"><span className="table-bar"><i style={{width:`${row.recall}%`}}/></span><span>{row.recall.toFixed(2)}%</span></div></td><td className="mono">{row.p50.toFixed(1)} ms</td><td className="mono">{row.p95.toFixed(1)} ms</td><td><span className={`table-insight ${i===2?'good':''}`}>{i===0?'Lowest overhead':i===1?'Higher recall':'Cache / routing trade-off'}</span></td></tr>)}</tbody></table></div><p className="chart-caveat">These measurements compare retrieval stages and should not be directly compared with end-to-end timings including LLM generation.</p></section>
@@ -238,7 +766,7 @@ function MetricsPage({isLive,health,metrics,refreshOverview}) {
 }
 function ChartTooltip({active,payload,label,suffix=''}){if(!active||!payload?.length)return null;return <div className="chart-tooltip"><span>{label}</span><b>{fmt(payload[0].value,1)}{suffix}</b></div>}
 function QualityRow({label,value}){return <div className="quality-row"><span>{label}</span><span className="quality-track"><i style={{width:`${value*100}%`}}/></span><b>{pct(value)}</b></div>}
-function LiveStat({icon:Icon,label,value}){return <div className="live-stat"><span><Icon size={15}/>{label}</span><b>{value==null?'—':Number(value).toLocaleString()}</b></div>}
+function LiveStat({icon:Icon,label,value}){return <div className="live-stat"><span><Icon size={15}/>{label}</span><b>{value==null?'-':Number(value).toLocaleString()}</b></div>}
 
 function LibraryPage({docs,setDocs,totalDocs,totalChunks,isLive,fileRef,uploadFiles,uploadBusy,selectedDoc,setSelectedDoc}) {
   const [filter,setFilter]=useState('All');const [term,setTerm]=useState('');
@@ -246,7 +774,7 @@ function LibraryPage({docs,setDocs,totalDocs,totalChunks,isLive,fileRef,uploadFi
   return <div className="library-page page-enter"><SectionHeading eyebrow="KNOWLEDGE BASE" title="Document library" description="Manage the source material your retrieval pipeline can search." action={<><input ref={fileRef} type="file" multiple hidden accept=".pdf,.txt,.md,.docx,.html,.csv,.json" onChange={e=>{uploadFiles(e.target.files);e.target.value=''}}/><button className="button button-primary" onClick={()=>fileRef.current?.click()} disabled={uploadBusy}>{uploadBusy?<LoaderCircle size={15} className="spin"/>:<Plus size={16}/>}Add documents</button></>}/>
     <div className="library-stats"><div><span>Documents</span><b>{totalDocs}</b><small>Available to the workspace</small></div><div><span>Indexed chunks</span><b>{totalChunks.toLocaleString()}</b><small>Source passages across documents</small></div><div><span>Index status</span><b className="status-value"><i className={`status-dot ${isLive?'online':'offline'}`}/>{isLive?'Connected':'Preview'}</b><small>{isLive?'Live API status':'Illustrative document list'}</small></div></div>
     <section className="surface library-table-surface"><div className="library-table-toolbar"><div className="segmented-control compact">{['All','Indexed','Processing'].map(f=><button key={f} className={filter===f?'selected':''} onClick={()=>setFilter(f)}>{f}</button>)}</div><div className="library-search"><Search size={15}/><input value={term} onChange={e=>setTerm(e.target.value)} placeholder="Find a document"/><kbd>/</kbd></div><button className="button button-secondary button-small" onClick={()=>setTerm('')}><Filter size={14}/>Filter</button></div>
-      <div className="library-list"><div className="library-list-head"><span>DOCUMENT</span><span>CHUNKS</span><span>STATUS</span><span>LAST UPDATED</span><span/></div>{filtered.map(doc=><button className={`library-row ${selectedDoc?.id===doc.id?'selected':''}`} key={doc.id} onClick={()=>setSelectedDoc(selectedDoc?.id===doc.id?null:doc)}><div className="document-name"><span className={`file-type ${doc.type==='PDF'?'pdf':doc.type==='MD'?'md':'other'}`}><FileText size={16}/></span><span><b>{doc.name}</b><small>{doc.type} <i>·</i> {doc.size||'—'}</small></span></div><span className="chunk-count">{doc.chunks||'—'}</span><span><Tag tone={doc.status==='INDEXED'?'green':'amber'} dot>{doc.status||'UNKNOWN'}</Tag></span><span className="doc-updated">{doc.updated||'—'}</span><ChevronRight size={15} className="row-chevron"/></button>)}{filtered.length===0&&<div className="empty-state"><FileSearch size={25}/><b>No matching documents</b><p>Try a different search term or filter.</p></div>}</div>
+      <div className="library-list"><div className="library-list-head"><span>DOCUMENT</span><span>CHUNKS</span><span>STATUS</span><span>LAST UPDATED</span><span/></div>{filtered.map(doc=><button className={`library-row ${selectedDoc?.id===doc.id?'selected':''}`} key={doc.id} onClick={()=>setSelectedDoc(selectedDoc?.id===doc.id?null:doc)}><div className="document-name"><span className={`file-type ${doc.type==='PDF'?'pdf':doc.type==='MD'?'md':'other'}`}><FileText size={16}/></span><span><b>{doc.name}</b><small>{doc.type} <i>·</i> {doc.size||'-'}</small></span></div><span className="chunk-count">{doc.chunks||'-'}</span><span><Tag tone={doc.status==='INDEXED'?'green':'amber'} dot>{doc.status||'UNKNOWN'}</Tag></span><span className="doc-updated">{doc.updated||'-'}</span><ChevronRight size={15} className="row-chevron"/></button>)}{filtered.length===0&&<div className="empty-state"><FileSearch size={25}/><b>No matching documents</b><p>Try a different search term or filter.</p></div>}</div>
       {selectedDoc&&<div className="selected-document"><div><b>{selectedDoc.name}</b><p>{selectedDoc.chunks||0} indexed chunks · {selectedDoc.status}</p></div><button className="button button-secondary button-small" onClick={()=>setSelectedDoc(null)}>Close details<X size={14}/></button></div>}
       <div className="library-table-foot"><span>Showing {filtered.length} of {docs.length} documents</span><span><Database size={13}/>{isLive?'Synced from API':'Preview data'}</span></div>
     </section>
@@ -258,7 +786,7 @@ function SearchPage({searchTerm,setSearchTerm,searchStrategy,setSearchStrategy,s
   return <div className="search-page page-enter"><SectionHeading eyebrow="RETRIEVAL INSPECTOR" title="Search explorer" description="Inspect retrieved passages before generation. Compare lexical, dense, and hybrid retrieval."/>
     <form className="search-explorer-form surface" onSubmit={runSearch}><div className="search-explorer-input"><Search size={19}/><input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder="Search your indexed knowledge…"/><button className="button button-primary" type="submit" disabled={!searchTerm.trim()||searchBusy}>{searchBusy?<LoaderCircle size={15} className="spin"/>:<Search size={15}/>}Search</button></div><div className="search-options"><span className="option-label">RETRIEVER</span><div className="segmented-control compact">{['hybrid','dense','keyword'].map(x=><button type="button" key={x} className={searchStrategy===x?'selected':''} onClick={()=>setSearchStrategy(x)}>{x==='keyword'?'BM25':x[0].toUpperCase()+x.slice(1)}</button>)}</div><span className="search-option-hint">Top 8 candidates <i>·</i> Raw retrieval scores</span></div></form>
     {searchBusy&&<div className="empty-state"><LoaderCircle size={24} className="spin"/><b>Retrieving candidates</b><p>Running {searchStrategy} retrieval against your index.</p></div>}
-    {searchResults&&<section className="search-result-section"><div className="search-results-header"><div><h3>Retrieved passages</h3><p>{searchResults.length} results · {searchStrategy.toUpperCase()} strategy</p></div><Tag tone="blue">LIVE SEARCH</Tag></div>{searchResults.length?searchResults.map((r,i)=><article className="search-result surface" key={r.chunk_id||i}><div className="result-top"><div className="result-source"><span className="result-rank">{String(i+1).padStart(2,'0')}</span><div><b>{r.filename||r.document_id||r.metadata?.filename||'Retrieved document'}</b><small>{r.retriever||searchStrategy} <i>·</i> {r.page?`Page ${r.page}`:'Passage'}</small></div></div><div className="result-score"><span>SCORE</span><b>{typeof r.score==='number'?fmt(r.score,4):'—'}</b></div></div><p className="result-excerpt">{r.text||r.snippet||'No passage text returned.'}</p><div className="result-bottom"><span><Layers3 size={13}/>{r.chunk_id||'Chunk ID unavailable'}</span><span>Rank {r.rank||i+1}</span></div></article>):<div className="empty-state"><FileSearch size={25}/><b>No passages found</b><p>Try a different query or retrieval strategy.</p></div>}</section>}
+    {searchResults&&<section className="search-result-section"><div className="search-results-header"><div><h3>Retrieved passages</h3><p>{searchResults.length} results · {searchStrategy.toUpperCase()} strategy</p></div><Tag tone="blue">LIVE SEARCH</Tag></div>{searchResults.length?searchResults.map((r,i)=><article className="search-result surface" key={r.chunk_id||i}><div className="result-top"><div className="result-source"><span className="result-rank">{String(i+1).padStart(2,'0')}</span><div><b>{r.filename||r.document_id||r.metadata?.filename||'Retrieved document'}</b><small>{r.retriever||searchStrategy} <i>·</i> {r.page?`Page ${r.page}`:'Passage'}</small></div></div><div className="result-score"><span>SCORE</span><b>{typeof r.score==='number'?fmt(r.score,4):'-'}</b></div></div><p className="result-excerpt">{r.text||r.snippet||'No passage text returned.'}</p><div className="result-bottom"><span><Layers3 size={13}/>{r.chunk_id||'Chunk ID unavailable'}</span><span>Rank {r.rank||i+1}</span></div></article>):<div className="empty-state"><FileSearch size={25}/><b>No passages found</b><p>Try a different query or retrieval strategy.</p></div>}</section>}
     {!searchResults&&!searchBusy&&<div className="search-empty-layout"><div className="search-empty-graphic"><div className="search-orbit orbit-one"/><div className="search-orbit orbit-two"/><div className="search-core"><Database size={28}/></div><span className="orbit-node node-a"/><span className="orbit-node node-b"/><span className="orbit-node node-c"/></div><h3>Look closer at retrieval.</h3><p>Search results show which passages the retriever considers relevant before the generation step begins.</p><div className="search-methods"><span><Network size={15}/>Hybrid fusion</span><span><Zap size={15}/>Dense similarity</span><span><BookOpen size={15}/>BM25 lexical</span></div></div>}
   </div>;
 }

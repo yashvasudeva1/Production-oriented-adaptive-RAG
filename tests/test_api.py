@@ -46,6 +46,13 @@ def test_api_ready_returns_503_when_qdrant_unhealthy(monkeypatch):
     assert r.status_code == 503
 
 
+def test_api_root_serves_frontend():
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers.get("content-type", "")
+    assert "Nexus" in r.text
+
+
 def test_api_list_documents():
     r = client.get("/documents")
     assert r.status_code == 200

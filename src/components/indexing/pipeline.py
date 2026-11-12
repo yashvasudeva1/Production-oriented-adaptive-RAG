@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 import time
 from typing import List, Optional, Sequence
 
@@ -72,13 +74,80 @@ class IndexingPipeline:
                     )
                     continue
 
+                # Prepend a document-level summary chunk for improved summarization recall.
+                # The summary is built from the first 600 characters of the top 3 unique chunks,
+                # giving retrieval a holistic "overview" anchor without LLM inference cost.
+                try:
+                    seen_texts = set()
+                    summary_parts = []
+                    for c in chunks:
+                        key = c.text[:80]
+                        if key not in seen_texts and len(summary_parts) < 3:
+                            seen_texts.add(key)
+                            summary_parts.append(c.text[:200])
+                    if summary_parts:
+                        from ..chunking.models import Chunk
+                        summary_text = " [...] ".join(summary_parts)
+                        summary_id = hashlib.md5(
+                            f"summary:{doc.document_id}".encode()
+                        ).hexdigest()[:16]
+                        summary_chunk = Chunk(
+                            chunk_id=f"summary_{summary_id}",
+                            document_id=doc.document_id,
+                            text=summary_text,
+                            chunk_type="summary",
+                            parent_id=None,
+                            source_locator=chunks[0].source_locator if chunks else None,
+                            page=None,
+                            section="Document Overview",
+                            metadata={**doc.metadata, "is_summary": True},
+                        )
+                        chunks = [summary_chunk] + list(chunks)
+                except Exception as _sum_exc:
+                    logger.debug(f"Summary chunk generation skipped: {_sum_exc}")
+
                 # Cache raw parent chunk text so parent-child retrieval can expand without re-reading files
                 for c in chunks:
                     if c.chunk_type == "parent":
                         self.doc_store.store_parent_text(c.chunk_id, c.text)
 
+                # Ingest-time chunk deduplication across documents (e.g. arXiv vs NIPS copies of the same paper)
+                existing_hashes = {
+                    hashlib.md5(re.sub(r"\s+", " ", c.get("text", "")).strip().lower().encode()).hexdigest()
+                    for c in getattr(self.bm25, "_all_chunks", [])
+                    if c.get("document_id") != doc.document_id
+                }
+                deduped_chunks = []
+                for c in chunks:
+                    c_hash = hashlib.md5(re.sub(r"\s+", " ", c.text).strip().lower().encode()).hexdigest()
+                    if c_hash in existing_hashes:
+                        logger.info(f"Skipping cross-document duplicate chunk {c.chunk_id} from {doc.filename}")
+                        continue
+                    existing_hashes.add(c_hash)
+                    deduped_chunks.append(c)
+                chunks = deduped_chunks
+
                 chunk_texts = [c.text for c in chunks]
                 embeddings = self.embedder.embed_texts(chunk_texts)
+
+                # Cache vectors to disk to enable instant sub-second app restarts
+                try:
+                    import numpy as np
+                    from pathlib import Path
+                    dim = getattr(self.embedder, "dimension", len(embeddings[0]) if embeddings else 384)
+                    cache_file = Path(__file__).resolve().parents[3] / "metadata" / f"chunk_embeddings_{dim}.npz"
+                    cache_dict = {}
+                    if cache_file.exists():
+                        try:
+                            c_data = np.load(cache_file)
+                            cache_dict = {k: c_data[k] for k in c_data.files}
+                        except Exception:
+                            pass
+                    for c, v in zip(chunks, embeddings):
+                        cache_dict[c.chunk_id] = np.array(v, dtype=np.float32)
+                    np.savez_compressed(cache_file, **cache_dict)
+                except Exception as _c_exc:
+                    logger.debug(f"Vector disk caching skipped: {_c_exc}")
 
                 # Keep vector index and keyword index synchronized
                 self.qdrant.upsert_chunks(chunks, embeddings)

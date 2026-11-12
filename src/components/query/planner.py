@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 # "low" confidence fields are always downgraded to soft retrieval hints.
 _HARD_FILTER_MIN_CONFIDENCE = {"high", "medium"}
 
+# Bidirectional alias mapping between legacy document IDs in documents.json
+# and SHA256-derived IDs produced by the ingestion pipeline.
+_DOC_ID_ALIASES: Dict[str, str] = {
+    "7725cf5b21f15913": "doc_1731f7ed91a5404ec0a6",
+    "f27bfd499576a1fc": "doc_d87d482d5ae7960e2e43",
+    "2510521858616bf9": "doc_1f3633afedabd9ee1998",
+    "317e6c70bbb68d1a": "doc_5272452543608d401f61",
+}
+for _k, _v in list(_DOC_ID_ALIASES.items()):
+    _DOC_ID_ALIASES[_v] = _k
+
 
 class QueryPlanner:
     """
@@ -67,8 +78,11 @@ class QueryPlanner:
         else:
             mode = signals.initial_route
 
-        # Fast path bypasses heavy metadata filtering & decomposition
-        candidate_ids: List[str] = list(explicit_document_ids or [])
+        # Explicit API filters vs Inferred NL filters
+        explicit_ids: List[str] = list(explicit_document_ids or [])
+        is_explicit = bool(explicit_ids)
+        candidate_ids: List[str] = list(explicit_ids)
+        inferred_candidate_ids: List[str] = []
         retrieval_signals: Dict[str, Any] = {
             "signals": signals,
             "exact_identifiers": signals.exact_identifiers,
@@ -79,8 +93,8 @@ class QueryPlanner:
         from ..retrieval.filters import RetrievalFilter, FilterCondition
 
         retrieval_filter = RetrievalFilter()
-        if candidate_ids:
-            retrieval_filter.document_ids = list(candidate_ids)
+        if explicit_ids:
+            retrieval_filter.document_ids = list(explicit_ids)
 
         # Run metadata extraction and build canonical hard/soft filters
         if self.metadata_extractor:
@@ -103,7 +117,7 @@ class QueryPlanner:
                 # Low-confidence document_type → soft hint only
                 logger.debug(
                     f"[planner] Soft hint: document_type={extracted_meta['document_type']} "
-                    f"(conf={field_confidence.get('document_type', 'low')}) — not applied as hard filter"
+                    f"(conf={field_confidence.get('document_type', 'low')}) - not applied as hard filter"
                 )
 
             # department → always high confidence if present
@@ -125,7 +139,7 @@ class QueryPlanner:
             elif extracted_meta.get("organizations"):
                 logger.debug(
                     f"[planner] Soft hint: organizations={extracted_meta['organizations']} "
-                    f"(conf={field_confidence.get('organizations', 'low')}) — not applied as hard filter"
+                    f"(conf={field_confidence.get('organizations', 'low')}) - not applied as hard filter"
                 )
 
             # dates → hard filter only if confidence is sufficient
@@ -144,7 +158,7 @@ class QueryPlanner:
                 # Year mentioned in query context → soft retrieval hint only
                 logger.debug(
                     f"[planner] Soft hint: dates={extracted_meta['dates']} "
-                    f"(conf={field_confidence.get('dates', 'low')}) — not applied as hard filter"
+                    f"(conf={field_confidence.get('dates', 'low')}) - not applied as hard filter"
                 )
 
             # locations → hard filter only if confidence is sufficient
@@ -164,10 +178,8 @@ class QueryPlanner:
             if signals.quoted_phrases:
                 retrieval_filter.retrieval_hints.quoted_phrases.extend(signals.quoted_phrases)
 
-            # Legacy metadata filter compatibility for backward-compatible tests.
-            # Only used when there are actual hard filters already decided above
-            # AND explicit candidate IDs haven't been provided from elsewhere.
-            if mode in ("balanced", "deep") and self.metadata_filter and not candidate_ids:
+            # Inferred NL filter extraction: convert to soft preferences rather than hard masks
+            if mode in ("balanced", "deep") and self.metadata_filter and not explicit_ids:
                 if not retrieval_filter.is_empty() and retrieval_filter.hard_filters:
                     try:
                         qm = QueryMetadata(
@@ -180,12 +192,15 @@ class QueryPlanner:
                         )
                         filter_res = self.metadata_filter.filter(query_metadata=qm)
                         if filter_res.applied_filters and filter_res.document_ids:
-                            candidate_ids = list(set(filter_res.document_ids))
-                            if not retrieval_filter.document_ids:
-                                retrieval_filter.document_ids = candidate_ids
+                            resolved_cands: List[str] = []
+                            for did in filter_res.document_ids:
+                                resolved_cands.append(did)
+                                if did in _DOC_ID_ALIASES:
+                                    resolved_cands.append(_DOC_ID_ALIASES[did])
+                            inferred_candidate_ids = list(set(resolved_cands))
                         retrieval_signals.update(filter_res.retrieval_signals)
                     except Exception as exc:
-                        logger.warning(f"Legacy metadata filter fallback skipped: {exc}")
+                        logger.warning(f"Inferred metadata filter extraction skipped: {exc}")
 
         # Sub-query decomposition for deep mode
         sub_queries: List[str] = []
@@ -202,38 +217,39 @@ class QueryPlanner:
             req_multi_query = False
             req_decomposition = False
             req_rerank = False
-            top_k = 6
+            top_k = 10
             top_k_dense = 0
-            top_k_keyword = 6
+            top_k_keyword = 15
             rerank_top_k = 0
-            context_budget = 1200
-        elif mode == "deep":
+            context_budget = 1600
+        elif mode in ("deep", "hybrid_rerank"):
             req_dense = True
             req_keyword = True
             req_hybrid = True
             req_parent_child = True
-            req_multi_query = True
+            req_multi_query = (mode == "deep")
             req_decomposition = len(sub_queries) > 1
             req_rerank = True
-            top_k = 15
-            top_k_dense = 15
-            top_k_keyword = 12
-            rerank_top_k = 8
-            context_budget = 3500
+            top_k = 25
+            top_k_dense = 25
+            top_k_keyword = 20
+            rerank_top_k = 15
+            context_budget = 4000
         else:
             # Balanced mode: parallel BM25 + dense, RRF fusion, conditional rerank
             req_dense = True
             req_keyword = True
             req_hybrid = True
-            req_parent_child = (signals.intent in ("detailed", "procedural", "summary"))
+            req_parent_child = (signals.intent in ("detailed", "procedural", "summary", "multi_hop"))
             req_multi_query = False
             req_decomposition = False
             req_rerank = True
-            top_k = 15 if signals.intent == "summary" else 10
-            top_k_dense = 15 if signals.intent == "summary" else 10
-            top_k_keyword = 12 if signals.intent == "summary" else 10
-            rerank_top_k = 8 if signals.intent == "summary" else 5
-            context_budget = 3200 if signals.intent == "summary" else 2048
+            is_broad = signals.intent in ("summary", "multi_hop", "comparison")
+            top_k = 15 if is_broad else 12
+            top_k_dense = 18 if is_broad else 15
+            top_k_keyword = 18 if is_broad else 15
+            rerank_top_k = 8 if is_broad else 6
+            context_budget = 3500 if is_broad else 2400
 
         has_meta_filter = bool(candidate_ids) or bool(retrieval_filter.hard_filters)
         q_type: QueryType = (
@@ -254,7 +270,10 @@ class QueryPlanner:
             execution_mode=mode,
             answerability="supported",
             sub_queries=sub_queries if req_decomposition else [],
-            candidate_document_ids=candidate_ids,
+            candidate_document_ids=explicit_ids,
+            explicit_document_ids=explicit_ids,
+            inferred_document_ids=inferred_candidate_ids,
+            is_explicit_filter=is_explicit,
             metadata_filters=extracted_meta,
             retrieval_filter=retrieval_filter,
             retrieval_signals=retrieval_signals,

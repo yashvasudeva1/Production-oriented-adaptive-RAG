@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from typing import Any, Dict, List, Optional, Sequence
 from pydantic import BaseModel, Field
 
@@ -49,28 +50,62 @@ class CrossEncoderReranker:
         device: str = "cpu",
         default_top_k: int = 5,
         confidence_threshold: float = 0.85,
+        fast_cpu: bool = True,
     ) -> None:
-        self.model_name = model_name
         self.device = device
         self.default_top_k = default_top_k
         self.confidence_threshold = confidence_threshold
-        self._model = None
+        self.fast_cpu = fast_cpu
+
+        clean_name = (model_name or "").strip()
+        force_heavy = os.getenv("FORCE_HEAVY_RERANKER", "0").lower() in ("1", "true", "yes")
+
+        # When running on CPU, heavy cross-encoders (0.6B+ params) introduce severe latency (~28s per query).
+        # Auto-switch to cached ms-marco-MiniLM-L-6-v2 (~200ms) for high-throughput CPU execution.
+        if self.device == "cpu" and self.fast_cpu and not force_heavy:
+            if any(h in clean_name.lower() for h in ("qwen", "bge-reranker")):
+                logger.info(
+                    f"CPU execution detected with heavy reranker '{clean_name}'. "
+                    "Auto-switching to 'cross-encoder/ms-marco-MiniLM-L-6-v2' (200ms vs 28s on CPU)."
+                )
+                clean_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+        self.model_name = clean_name
+        self.enabled = (clean_name or "").strip().lower() not in ("none", "", "disabled", "false", "0")
+        self._model = None if self.enabled else False
 
     def _load_model(self):
+        if not self.enabled:
+            self._model = False
+            return
         if self._model is None:
+            allow_fallback = (
+                os.getenv("ALLOW_MOCK_EMBEDDER", "0").lower() in ("1", "true", "yes")
+                or os.getenv("OFFLINE_EVAL", "0").lower() in ("1", "true", "yes")
+            )
             try:
                 from sentence_transformers import CrossEncoder
                 try:
-                    self._model = CrossEncoder(self.model_name, device=self.device, local_files_only=True)
+                    self._model = CrossEncoder(self.model_name, device=self.device, max_length=384, local_files_only=True)
                 except Exception:
-                    self._model = CrossEncoder(self.model_name, device=self.device)
-                logger.info(f"Loaded CrossEncoder: {self.model_name}")
+                    if allow_fallback:
+                        raise
+                    self._model = CrossEncoder(self.model_name, device=self.device, max_length=384)
+                if hasattr(self._model, "max_seq_length"):
+                    self._model.max_seq_length = 384
+                if hasattr(self._model, "tokenizer") and hasattr(self._model.tokenizer, "model_max_length"):
+                    self._model.tokenizer.model_max_length = 384
+                logger.info(f"Loaded CrossEncoder: {self.model_name} (max_length=384)")
             except Exception as exc:
                 if self.model_name != "cross-encoder/ms-marco-MiniLM-L-6-v2":
                     try:
                         from sentence_transformers import CrossEncoder
-                        self._model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", device=self.device, local_files_only=True)
-                        logger.info("Fell back to cached ms-marco-MiniLM-L-6-v2")
+                        self._model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", device=self.device, max_length=384, local_files_only=True)
+                        if hasattr(self._model, "max_seq_length"):
+                            self._model.max_seq_length = 384
+                        if hasattr(self._model, "tokenizer") and hasattr(self._model.tokenizer, "model_max_length"):
+                            self._model.tokenizer.model_max_length = 384
+                        logger.info("Fell back to cached ms-marco-MiniLM-L-6-v2 (max_length=384)")
                         return
                     except Exception:
                         pass
@@ -99,6 +134,8 @@ class CrossEncoderReranker:
         Determines whether reranking adds value or if candidates have high confidence.
         Confidence >= confidence_threshold (e.g. 0.85) bypasses expensive cross-encoder inference.
         """
+        if not self.enabled:
+            return False
         if execution_mode == "fast":
             return False
         if not candidates:
@@ -114,6 +151,11 @@ class CrossEncoderReranker:
             if score is not None and score >= self.confidence_threshold:
                 logger.debug(
                     f"Bypassing reranker: retrieval confidence {score:.2f} >= threshold {self.confidence_threshold:.2f}"
+                )
+                return False
+            if getattr(confidence, "is_sufficient", False) and score is not None and score >= 0.80:
+                logger.debug(
+                    f"Bypassing reranker: candidates marked sufficient with confidence {score:.2f}"
                 )
                 return False
 
@@ -139,9 +181,10 @@ class CrossEncoderReranker:
                 unique_cands[cid] = c
 
         cand_list = list(unique_cands.values())[:k]
+        cand_list.sort(key=lambda c: (_get_field(c, 'dense_score', None) or _get_field(c, 'fusion_score', 0.0) or _get_field(c, 'score', 0.0)), reverse=True)
         results: List[RerankerResult] = []
         for rank, c in enumerate(cand_list, start=1):
-            score = float(_get_field(c, "fusion_score", 0.0) or _get_field(c, "score", 0.0))
+            score = float(_get_field(c, 'dense_score', None) or _get_field(c, 'fusion_score', 0.0) or _get_field(c, 'score', 0.0))
             results.append(
                 RerankerResult(
                     chunk_id=_get_field(c, "chunk_id", ""),
@@ -168,6 +211,7 @@ class CrossEncoderReranker:
         query: str,
         candidates: Sequence[UnifiedCandidate | Any],
         top_k: Optional[int] = None,
+        max_candidates: Optional[int] = None,
         force: bool = False,
     ) -> List[RerankerResult]:
         if not candidates:
@@ -177,6 +221,9 @@ class CrossEncoderReranker:
         if k <= 0:
             return []
 
+        if not self.enabled:
+            return self.bypass_rerank(candidates, top_k)
+
         # Deduplicate incoming candidates from multiple retrieval paths
         unique_cands: Dict[str, Any] = {}
         for c in candidates:
@@ -184,7 +231,9 @@ class CrossEncoderReranker:
             if cid and cid not in unique_cands:
                 unique_cands[cid] = c
 
-        cand_list = list(unique_cands.values())
+        # Cap candidates: default top_n = 10 for standard rerank, 6 for micro-rerank
+        cand_cap = max_candidates or min(len(unique_cands), 10)
+        cand_list = list(unique_cands.values())[:cand_cap]
         if not cand_list:
             return []
 
@@ -209,7 +258,19 @@ class CrossEncoderReranker:
             self._load_model()
             if self._model and self._model is not False:
                 try:
-                    pred_scores = self._model.predict(missing_pairs)
+                    import torch
+                    # Sort missing pairs by chunk text length to minimize dynamic padding overhead
+                    sorted_order = sorted(range(len(missing_pairs)), key=lambda i: len(missing_pairs[i][1]))
+                    sorted_pairs = [missing_pairs[i] for i in sorted_order]
+                    with torch.inference_mode():
+                        pred_scores_sorted = self._model.predict(
+                            sorted_pairs,
+                            batch_size=min(len(sorted_pairs), 16),
+                            show_progress_bar=False,
+                        )
+                    pred_scores = [0.0] * len(missing_pairs)
+                    for sorted_idx, p_score in zip(sorted_order, pred_scores_sorted):
+                        pred_scores[sorted_idx] = float(p_score)
                 except Exception as exc:
                     logger.error(f"Cross-encoder predict failed: {exc}, using fallback.")
                     pred_scores = [self._fallback_score(query, p[1]) for p in missing_pairs]
@@ -258,6 +319,33 @@ class CrossEncoderReranker:
                     metadata=meta,
                 )
             )
+
+        # Blended reranking: prevent cross-encoder noise from overwriting high-consensus
+        # retrieval rankings. S_final = 0.65*sigmoid(CE) + 0.35*RRF_norm
+        # This preserves chunks with BM25+Dense+exact-match consensus.
+        if scored_results:
+            # Compute min/max raw cross-encoder scores for normalization
+            ce_scores = [r.rerank_score for r in scored_results]
+            ce_min = min(ce_scores)
+            ce_max = max(ce_scores)
+            ce_spread = ce_max - ce_min
+
+            # RRF scores are stored in fusion_score; normalize them too
+            rrf_vals = [r.fusion_score for r in scored_results if r.fusion_score is not None]
+            rrf_min = min(rrf_vals) if rrf_vals else 0.0
+            rrf_max = max(rrf_vals) if rrf_vals else 1.0
+            rrf_spread = rrf_max - rrf_min
+
+            alpha = 0.65  # Weight for cross-encoder signal
+            for r in scored_results:
+                # Sigmoid-normalize cross-encoder score (maps logits to [0,1])
+                ce_sig = 1.0 / (1.0 + math.exp(-r.rerank_score)) if abs(r.rerank_score) < 20 else (1.0 if r.rerank_score > 0 else 0.0)
+                # Min-max normalize RRF fusion score
+                fus = r.fusion_score if r.fusion_score is not None else 0.0
+                rrf_norm = (fus - rrf_min) / (rrf_spread + 1e-9) if rrf_spread > 1e-6 else 0.5
+                # Blended final score
+                r.rerank_score = alpha * ce_sig + (1.0 - alpha) * rrf_norm
+                r.score = r.rerank_score
 
         scored_results.sort(key=lambda r: r.rerank_score, reverse=True)
 

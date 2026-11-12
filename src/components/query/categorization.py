@@ -23,7 +23,8 @@ class AdaptiveQueryCategorizer:
     """
 
     def __init__(self, use_llm_if_available: bool = True) -> None:
-        self.use_llm = use_llm_if_available
+        offline = os.getenv("OFFLINE_EVAL", "0").lower() in ("1", "true", "yes")
+        self.use_llm = use_llm_if_available and not offline
         self._llm_classifier: Optional[QueryCategorization] = None
         if self.use_llm and os.getenv("GROQ_API_KEY"):
             try:

@@ -2,9 +2,10 @@
 __pycache__/
 *.py[oc]
 build/
-dist/
+/dist/
 wheels/
 *.egg-info
+!frontend/dist/
 
 # Virtual environments
 venv
@@ -15,8 +16,12 @@ venv
 node_modules/
 dist/
 
+node_modules/
+frontend/node_modules/
+
 /documents
 /metadata
+/data
 
 # Local agent artifacts
 AGENT_REFACTORING_SPEC.md
