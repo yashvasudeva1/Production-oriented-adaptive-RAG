@@ -118,7 +118,7 @@ def run_benchmark():
 
             t0 = time.perf_counter()
             if cfg == "DENSE":
-                resp = orchestrator.query(case.query, mode="deep")
+                resp = orchestrator.query(case.query, mode="dense")
                 raw_dense = orchestrator._search_dense(case.query, None, 5)
                 ret_ctx = [r.text for r in raw_dense]
             elif cfg == "BM25":
@@ -127,13 +127,13 @@ def run_benchmark():
                 ret_ctx = [r.text for r in raw_bm25]
             elif cfg == "HYBRID":
                 resp = orchestrator.query(case.query, mode="hybrid")
-                ret_ctx = [s.get("text", "") for s in resp.sources]
+                ret_ctx = [s.get("snippet", s.get("text", "")) for s in resp.sources]
             elif cfg == "HYBRID_RERANK":
                 resp = orchestrator.query(case.query, mode="hybrid_rerank")
-                ret_ctx = [s.get("text", "") for s in resp.sources]
+                ret_ctx = [s.get("snippet", s.get("text", "")) for s in resp.sources]
             else:  # ADAPTIVE
                 resp = orchestrator.query(case.query)
-                ret_ctx = [s.get("text", "") for s in resp.sources]
+                ret_ctx = [s.get("snippet", s.get("text", "")) for s in resp.sources]
 
             lat_ms = (time.perf_counter() - t0) * 1000
 

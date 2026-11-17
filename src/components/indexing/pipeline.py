@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 class IndexingPipeline:
     """
     Unified indexing pipeline that consumes Documents or Chunks,
-    produces dense embeddings, and synchronizes Qdrant, BM25, and DocumentStore.
+    produces dense embeddings, and synchronizes Qdrant, BM25, and DocumentStore
+    with two-phase transactional rollback, version tracking, and consistency checks.
     """
 
     def __init__(
@@ -37,17 +38,19 @@ class IndexingPipeline:
         self.bm25 = bm25_indexer or BM25Indexer()
         self.doc_store = document_store or DocumentStore()
         self.chunker = chunking_pipeline or ChunkingPipeline()
+        self.index_version = 1
 
     def index_documents(
         self,
         documents: Sequence[Document],
         force_reindex: bool = False,
     ) -> IndexingStats:
-        """Process and index a batch of documents idempotently."""
+        """Process and index a batch of documents idempotently with rollback on failure."""
         start_time = time.perf_counter()
         stats = IndexingStats()
 
         for doc in documents:
+            qdrant_upserted = False
             try:
                 # Skip re-indexing if content hash has already been processed
                 existing = self.doc_store.get_by_sha256(doc.sha256)
@@ -75,8 +78,6 @@ class IndexingPipeline:
                     continue
 
                 # Prepend a document-level summary chunk for improved summarization recall.
-                # The summary is built from the first 600 characters of the top 3 unique chunks,
-                # giving retrieval a holistic "overview" anchor without LLM inference cost.
                 try:
                     seen_texts = set()
                     summary_parts = []
@@ -111,7 +112,7 @@ class IndexingPipeline:
                     if c.chunk_type == "parent":
                         self.doc_store.store_parent_text(c.chunk_id, c.text)
 
-                # Ingest-time chunk deduplication across documents (e.g. arXiv vs NIPS copies of the same paper)
+                # Ingest-time chunk deduplication across documents
                 existing_hashes = {
                     hashlib.md5(re.sub(r"\s+", " ", c.get("text", "")).strip().lower().encode()).hexdigest()
                     for c in getattr(self.bm25, "_all_chunks", [])
@@ -149,8 +150,10 @@ class IndexingPipeline:
                 except Exception as _c_exc:
                     logger.debug(f"Vector disk caching skipped: {_c_exc}")
 
-                # Keep vector index and keyword index synchronized
+                # Two-phase transaction: Qdrant first, then BM25 + DocumentStore
                 self.qdrant.upsert_chunks(chunks, embeddings)
+                qdrant_upserted = True
+
                 self.bm25.upsert_chunks(chunks)
 
                 self.doc_store.update_status(
@@ -162,27 +165,138 @@ class IndexingPipeline:
 
             except Exception as exc:
                 logger.error(f"Failed to index document {doc.filename}: {exc}")
+                # Rollback partial Qdrant writes if failure occurred downstream
+                if qdrant_upserted:
+                    try:
+                        logger.warning(f"Rolling back Qdrant points for failed document {doc.document_id}")
+                        self.qdrant.delete_by_document_id(doc.document_id)
+                    except Exception as rb_exc:
+                        logger.error(f"Failed to rollback Qdrant: {rb_exc}")
                 self.doc_store.update_status(
                     doc.document_id, status="FAILED", error_message=str(exc)
                 )
                 stats.errors.append({"document_id": doc.document_id, "error": str(exc)})
 
+        if stats.documents_indexed > 0:
+            self.index_version += 1
+            from ..cache import CacheManager
+            CacheManager.get_instance().bump_index_version()
+
         stats.duration_ms = (time.perf_counter() - start_time) * 1000
         return stats
 
     def index_chunks(self, chunks: Sequence[Chunk]) -> int:
-        """Directly index a pre-generated sequence of Chunks."""
+        """Directly index a pre-generated sequence of Chunks with failure recovery."""
         if not chunks:
             return 0
         texts = [c.text for c in chunks]
         embeddings = self.embedder.embed_texts(texts)
-        self.qdrant.upsert_chunks(chunks, embeddings)
-        self.bm25.upsert_chunks(chunks)
-        return len(chunks)
+        qdrant_done = False
+        try:
+            self.qdrant.upsert_chunks(chunks, embeddings)
+            qdrant_done = True
+            self.bm25.upsert_chunks(chunks)
+            self.index_version += 1
+            from ..cache import CacheManager
+            CacheManager.get_instance().bump_index_version()
+            return len(chunks)
+        except Exception as exc:
+            logger.error(f"Failed to index chunks: {exc}")
+            if qdrant_done:
+                try:
+                    c_ids = [c.chunk_id for c in chunks]
+                    self.qdrant.client.delete(
+                        collection_name=self.qdrant.collection_name,
+                        points_selector=c_ids,
+                    )
+                except Exception:
+                    pass
+            raise
 
     def delete_document(self, document_id: str) -> bool:
-        """Delete a document and all its chunks from Qdrant, BM25, and DocumentStore."""
+        """Delete a document and all its chunks consistently from Qdrant, BM25, and DocumentStore."""
         q_deleted = self.qdrant.delete_by_document_id(document_id)
         b_deleted = self.bm25.delete_by_document_id(document_id)
         s_deleted = self.doc_store.delete(document_id)
+        self.index_version += 1
+        from ..cache import CacheManager
+        CacheManager.get_instance().bump_index_version()
         return q_deleted or b_deleted or s_deleted
+
+    def verify_index_consistency(self) -> Dict[str, Any]:
+        """
+        Verify synchronization and consistency across Qdrant, BM25, and DocumentStore.
+        Reports any missing or orphan documents/chunks.
+        """
+        doc_store_docs = {d.document_id: d for d in self.doc_store.list_documents() if d.status == "INDEXED"}
+        bm25_chunks = getattr(self.bm25, "_all_chunks", [])
+        bm25_doc_ids = {c.get("document_id") for c in bm25_chunks if c.get("document_id")}
+
+        qdrant_points = self.qdrant.count()
+        bm25_chunk_count = len(bm25_chunks)
+
+        discrepancies: List[str] = []
+        orphaned_in_bm25 = set()
+        orphaned_in_qdrant = set()
+
+        if set(doc_store_docs.keys()) != bm25_doc_ids:
+            missing_in_bm25 = set(doc_store_docs.keys()) - bm25_doc_ids
+            orphaned_in_bm25 = bm25_doc_ids - set(doc_store_docs.keys())
+            if missing_in_bm25:
+                discrepancies.append(f"Documents in store but missing from BM25: {missing_in_bm25}")
+            if orphaned_in_bm25:
+                discrepancies.append(f"Documents in BM25 but missing from store: {orphaned_in_bm25}")
+
+        if qdrant_points != bm25_chunk_count and qdrant_points > 0 and bm25_chunk_count > 0:
+            discrepancies.append(
+                f"Chunk count mismatch: Qdrant has {qdrant_points} points, BM25 has {bm25_chunk_count} chunks"
+            )
+
+        is_consistent = len(discrepancies) == 0
+        return {
+            "consistent": is_consistent,
+            "is_consistent": is_consistent,
+            "index_version": self.index_version,
+            "document_store_count": len(doc_store_docs),
+            "bm25_chunk_count": bm25_chunk_count,
+            "qdrant_point_count": qdrant_points,
+            "discrepancies": discrepancies,
+            "orphaned_in_bm25": list(orphaned_in_bm25),
+        }
+
+    def repair_index_inconsistencies(self) -> Dict[str, Any]:
+        """Repair index discrepancies by resynchronizing BM25 chunks into Qdrant or pruning orphans."""
+        check = self.verify_index_consistency()
+        if check["consistent"]:
+            return {"status": "already_consistent", "repaired": True, "repaired_count": 0}
+
+        repaired_count = 0
+        bm25_chunks = getattr(self.bm25, "_all_chunks", [])
+        
+        # 1. Resynchronize Qdrant from BM25 if Qdrant is missing points
+        if len(bm25_chunks) > 0 and self.qdrant.count() == 0:
+            logger.info("Resynchronizing Qdrant collection from BM25 corpus...")
+            loaded = [Chunk.from_dict(c) for c in bm25_chunks]
+            vecs = self.embedder.embed_texts([c.text for c in loaded])
+            self.qdrant.upsert_chunks(loaded, vecs)
+            repaired_count += len(loaded)
+
+        # 2. Prune BM25 chunks that don't exist in doc_store
+        doc_store_docs = {d.document_id for d in self.doc_store.list_documents() if d.status == "INDEXED"}
+        if check.get("orphaned_in_bm25"):
+            for orphan_id in check["orphaned_in_bm25"]:
+                self.bm25.delete_by_document_id(orphan_id)
+                self.qdrant.delete_by_document_id(orphan_id)
+                repaired_count += 1
+
+        self.index_version += 1
+        from ..cache import CacheManager
+        CacheManager.get_instance().bump_index_version()
+
+        post_check = self.verify_index_consistency()
+        return {
+            "status": "repaired",
+            "repaired": True,
+            "chunks_re-indexed": repaired_count,
+            "post_check": post_check,
+        }

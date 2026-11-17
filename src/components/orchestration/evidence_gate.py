@@ -16,7 +16,8 @@ class EvidenceVerdict(BaseModel):
     allowed: bool
     confidence: float
     reason: str
-    supporting_chunks: List[RerankerResult] = Field(default_factory=list)
+    supporting_chunks: List[Any] = Field(default_factory=list)
+    signals: Dict[str, float] = Field(default_factory=dict)
 
 
 class EvidenceGate:
@@ -85,7 +86,7 @@ class EvidenceGate:
         # Check that top candidates cross the minimum relevance threshold
         viable_chunks = [
             c for c in candidates
-            if c.rerank_score >= self.min_rerank_threshold
+            if getattr(c, "rerank_score", getattr(c, "score", 1.0)) >= self.min_rerank_threshold
             or (getattr(c, "keyword_score", None) is not None and c.keyword_score >= 3.0)
         ]
 
@@ -103,14 +104,15 @@ class EvidenceGate:
         # 2. Comprehensive stopword filtering for substantive entity verification
         STOPWORDS = {
             "what", "when", "where", "which", "who", "whom", "whose", "why",
-            "how", "does", "explain", "tell", "about", "describe", "compare",
+            "how", "many", "much", "does", "explain", "tell", "about", "describe", "compare",
             "with", "from", "that", "this", "these", "those", "have", "were",
             "the", "for", "and", "are", "can", "you", "all", "not", "but",
             "any", "some", "each", "into", "over", "after", "before", "more",
             "also", "than", "been", "has", "had", "would", "could", "should",
             "its", "our", "their", "will", "out", "other", "give", "show",
             "provide", "find", "use", "used", "using", "between", "under", "per",
-            "won", "score", "year", "time", "place", "make", "made", "good", "new"
+            "won", "score", "year", "time", "place", "make", "made", "good", "new",
+            "number", "count"
         }
         q_tokens = re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", q_lower)
         key_q_words = [w for w in q_tokens if w not in STOPWORDS]
@@ -140,10 +142,12 @@ class EvidenceGate:
                     "for the query. Refusing to hallucinate."
                 ),
                 supporting_chunks=[],
+                signals={"overlap_ratio": round(overlap_ratio, 3), "term_coverage": 0.0},
             )
 
         # Check that quantitative/count queries contain at least one numeric entity/digit in top chunks
         is_quant = bool(re.search(r"\b(?:how many|how much|what percentage|count of|number of|what year|when)\b", q_lower))
+        has_numeric_evidence = True
         if is_quant:
             has_numeric_evidence = any(
                 re.search(r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b", c.text.lower())
@@ -155,19 +159,37 @@ class EvidenceGate:
                     confidence=round(overlap_ratio * 0.2, 2),
                     reason="The query asks for a quantitative count or measurement, but the retrieved context contains no numeric values or counts.",
                     supporting_chunks=[],
+                    signals={"overlap_ratio": round(overlap_ratio, 3), "numeric_grounding": 0.0},
                 )
 
-        # 4. Authentic calibrated confidence score
-        best_score = max((c.rerank_score for c in viable_chunks), default=0.0)
+        # 4. Calibrated, measurable evidence confidence score
+        # Grounded in physical lexical coverage, normalized retrieval relevance, and provenance agreement
+        best_score = max((getattr(c, "rerank_score", getattr(c, "score", 1.0)) for c in viable_chunks), default=0.0)
         if best_score > 1.0:
-            # Raw BM25 scores (typically 2 to 15) normalized linearly instead of saturating sigmoid
             sig_score = min(1.0, max(0.0, best_score / 15.0))
         elif best_score < 0.0:
             sig_score = 1.0 / (1.0 + math.exp(-max(-6.0, best_score)))
         else:
             sig_score = min(1.0, best_score * 20.0) if best_score < 0.05 else best_score
 
-        confidence = round(min(1.0, (sig_score * 0.4) + (overlap_ratio * 0.6)), 2)
+        # Check for dual-retriever agreement in top chunks
+        has_consensus = any(
+            len(getattr(c, "provenance_sources", [])) > 1
+            or ("dense" in getattr(c, "retriever_name", "") and getattr(c, "keyword_score", None) is not None)
+            for c in viable_chunks[:3]
+        )
+        consensus_bonus = 0.08 if has_consensus else 0.0
+
+        # Calibrated evidence index
+        confidence = round(min(1.0, (sig_score * 0.40) + (overlap_ratio * 0.60) + consensus_bonus), 2)
+
+        conf_signals = {
+            "term_overlap_ratio": round(overlap_ratio, 4),
+            "relevance_score": round(sig_score, 4),
+            "consensus_detected": 1.0 if has_consensus else 0.0,
+            "quantitative_grounded": 1.0 if (is_quant and has_numeric_evidence) else (0.5 if not is_quant else 0.0),
+            "calibrated_confidence": confidence,
+        }
 
         if confidence < self.min_confidence:
             return EvidenceVerdict(
@@ -175,6 +197,7 @@ class EvidenceGate:
                 confidence=confidence,
                 reason=f"Evidence confidence {confidence:.2f} is below minimum threshold {self.min_confidence:.2f}.",
                 supporting_chunks=[],
+                signals=conf_signals,
             )
 
         return EvidenceVerdict(
@@ -182,4 +205,5 @@ class EvidenceGate:
             confidence=confidence,
             reason="Sufficient grounded evidence found in retrieved chunks.",
             supporting_chunks=viable_chunks,
+            signals=conf_signals,
         )

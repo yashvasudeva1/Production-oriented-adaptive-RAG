@@ -49,19 +49,112 @@ KNOWN_TECHNICAL_IDENTIFIERS: Set[str] = {
     "d_v",
     "d_ff",
     "p_drop",
-    "bleu",
-    "adam",
-    "transformer",
-    "self-attention",
-    "multi-head",
-    "layer_norm",
+    "d_m",
+    "p_dropout",
     "layernorm",
-    "p100",
+    "layer_norm",
+    "bleu",
     "bpe",
-    "niti",
-    "aayog",
-    "nips",
+    "adam",
+    "p100",
+    "v100",
+    "hnsw",
+    "bm25",
+    "rrf",
 }
+
+DISALLOWED_CAPS: Set[str] = {
+    "A", "I", "IN", "ON", "AT", "TO", "FOR", "OF", "BY", "IS", "ARE", "WAS", "WERE",
+    "WHAT", "WHEN", "WHERE", "WHY", "HOW", "WHICH", "WHO", "THE", "AND", "BUT", "OR",
+    "NOT", "ALL", "ANY", "CAN", "DO", "DID", "HAS", "HAVE", "HAD", "BE", "BEEN", "WITH"
+}
+
+ENGLISH_STOP_WORDS: Set[str] = {
+    "a", "an", "the", "in", "on", "at", "to", "for", "of", "with", "by", "from",
+    "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "can", "could", "should", "would", "may", "might", "must",
+    "what", "which", "who", "whom", "this", "that", "these", "those", "where",
+    "when", "why", "how", "all", "any", "both", "each", "few", "more", "most",
+    "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so",
+    "than", "too", "very", "just", "and", "but", "if", "or", "because", "as",
+    "until", "while", "about", "against", "between", "into", "through", "during",
+    "before", "after", "above", "below", "up", "down", "out", "off", "over", "under",
+    "again", "further", "then", "once", "here", "there"
+}
+
+
+KNOWN_TECHNICAL_ACRONYMS: Set[str] = {
+    "BLEU", "HNSW", "RRF", "BM25", "BERT", "LSTM", "GRU", "GPU", "TPU", "CPU",
+    "BPE", "CNN", "RNN", "SGD", "NLP", "FFN", "MHA", "ROUGE", "GLUE"
+}
+
+
+def extract_technical_identifiers(query: str) -> List[str]:
+    """
+    Extract exact technical identifiers, formulas, acronyms, camelCase/snake_case
+    symbols, alphanumeric hardware/model identifiers, and single-character mathematical
+    variables from the query string without classifying ordinary English prose.
+    """
+    found: List[str] = []
+
+    # 1. Snake_case tokens (e.g. d_model, p_drop, layer_norm, attn_weights)
+    snake_case = re.findall(r"\b[a-zA-Z][a-zA-Z0-9]*_[a-zA-Z0-9_]+\b", query)
+    found.extend(snake_case)
+
+    # 2. CamelCase / mixed-case tokens (e.g. ByteNet, ConvS2S, Word2Vec, RoBERTa)
+    camel_case = re.findall(r"\b[A-Za-z0-9]*[a-z][A-Z][a-zA-Z0-9]*\b", query)
+    found.extend(camel_case)
+
+    # 3. Alphanumeric model/hardware names (e.g. P100, V100, GPT4, Llama3, bge-small)
+    alphanum = re.findall(r"\b(?:[A-Za-z]+[0-9]+|[0-9]+[A-Za-z]+)[A-Za-z0-9_-]*\b", query)
+    found.extend(alphanum)
+
+    # 4. Technical uppercase acronyms (e.g. BLEU, HNSW, RRF, BM25, BERT, LSTM, GPU, GPUs)
+    raw_acronyms = re.findall(r"\b([A-Z]{2,6})s?\b", query)
+    for acr in raw_acronyms:
+        if acr in KNOWN_TECHNICAL_ACRONYMS:
+            found.append(acr)
+
+    # 5. Single-character mathematical variables (e.g. N in 'parameter N', 'heads h', 'where N = 6')
+    # Standalone uppercase letters (excluding 'A' and 'I')
+    single_upper = re.findall(r"\b([B-HJ-Z])\b", query)
+    found.extend(single_upper)
+
+    # Lowercase single-letter mathematical variables when accompanied by variable/parameter context
+    single_var_matches = re.findall(
+        r"(?:heads?|layers?|dimension|parameter|variable|value\s+of|where)\s+([a-zA-Z])\b",
+        query,
+        re.IGNORECASE,
+    )
+    for v in single_var_matches:
+        if v.lower() not in {"a", "i"}:
+            found.append(v)
+
+    # Explicit variable assignments like 'h = 8' or 'k = 5' or 'N = 6'
+    assignments = re.findall(r"\b([a-zA-Z])\s*=\s*\d+", query)
+    for v in assignments:
+        if v.lower() not in {"a", "i"}:
+            found.append(v)
+
+    # 6. Dotted code identifiers (e.g. indexer.py, data.json)
+    dotted = re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\.(?:py|json|xml|csv|tsv|md)\b", query)
+    found.extend(dotted)
+
+    # 7. Check curated symbols (case-insensitive)
+    for sym in KNOWN_TECHNICAL_IDENTIFIERS:
+        if re.search(r"\b" + re.escape(sym) + r"\b", query, re.IGNORECASE):
+            found.append(sym)
+
+    # Deduplicate preserving case
+    dedup: List[str] = []
+    seen = set()
+    for item in found:
+        norm = item.strip()
+        if norm and norm.lower() not in seen and norm.lower() not in ENGLISH_STOP_WORDS:
+            seen.add(norm.lower())
+            dedup.append(norm)
+
+    return dedup
 
 
 def extract_query_signals(query: str, normalized_query: Optional[str] = None) -> QuerySignals:
@@ -85,15 +178,11 @@ def extract_query_signals(query: str, normalized_query: Optional[str] = None) ->
         if len(item.strip()) > 1 and len(item.split()) <= 12
     ]
 
-    # 2. Exact identifiers & parameters
-    exact_ids: List[str] = []
-    for token in re.findall(r"\b[a-zA-Z0-9_\-\.]{2,}\b", q_lower):
-        if token in KNOWN_TECHNICAL_IDENTIFIERS:
-            exact_ids.append(token)
-    # Numbers and percentages (e.g. 512, 64, 85%, 0.1)
+    # 2. Exact identifiers & parameters (audited detector: symbols, formulas, acronyms, single-char vars)
+    exact_ids = extract_technical_identifiers(q_raw)
+
+    # Numbers and percentages for quantitative queries
     numbers = re.findall(r"\b\d+(?:\.\d+)?%?\b", q_lower)
-    exact_ids.extend(numbers)
-    exact_ids = list(dict.fromkeys(exact_ids))
 
     # 3. Code symbols & syntax keywords
     code_symbols: List[str] = []

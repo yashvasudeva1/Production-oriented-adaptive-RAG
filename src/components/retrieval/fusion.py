@@ -50,8 +50,8 @@ def reciprocal_rank_fusion(
     bm25_results: Any = None,
     dense_results: Any = None,
     k: int = 20,
-    bm25_weight: float = 0.45,  # Balanced BM25/Dense with improved BGE dense model
-    dense_weight: float = 0.55,
+    bm25_weight: float = 0.50,  # Balanced BM25/Dense fusion
+    dense_weight: float = 0.50,
     candidate_lists: Optional[Sequence[Sequence[Any]]] = None,
     top_n: Optional[int] = None,
     exact_identifiers: Optional[Sequence[str]] = None,

@@ -144,7 +144,8 @@ class CitationValidator:
         "For", "With", "By", "As", "If", "When", "While", "Sources", "Source",
         "Figure", "Table", "Section", "Chapter", "Paper", "Papers", "Model",
         "Models", "Transformer", "Transformers", "Attention", "System", "Systems",
-        "Method", "Methods", "Data", "Document", "Documents"
+        "Method", "Methods", "Data", "Document", "Documents", "Final", "Answer",
+        "Question", "Result", "Summary", "Note", "Conclusion"
     }
 
     def _extract_content_words(self, text: str) -> List[str]:
@@ -176,14 +177,30 @@ class CitationValidator:
     def _check_polarity_inversion(
         self, claim_text: str, evidence_span: str, all_ctx_text: str
     ) -> Tuple[bool, Optional[str]]:
-        """Detect negation or antonym contradictions reversing factual polarity."""
+        """Detect negation or antonym contradictions reversing factual polarity against evidence."""
+        target_text = evidence_span or all_ctx_text
+        if not target_text:
+            return False, None
+
         c_clean = re.sub(r"[^\w\s]", "", claim_text.lower())
         c_words = set(c_clean.split())
-        ctx_words = set(re.sub(r"[^\w\s]", "", all_ctx_text.lower()).split())
+        span_clean = re.sub(r"[^\w\s]", "", target_text.lower())
+        span_words = set(span_clean.split())
 
-        # 1. Antonym contradiction check
+        # 1. Antonym contradiction check against matching evidence span
         for set_a, set_b in self.CONTRADICTION_PAIRS:
-            if (c_words & set_a and ctx_words & set_b) or (c_words & set_b and ctx_words & set_a):
+            c_a = bool(c_words & set_a)
+            c_b = bool(c_words & set_b)
+            s_a = bool(span_words & set_a)
+            s_b = bool(span_words & set_b)
+
+            # If both claim and evidence affirm the same polarity term, it is agreement, not contradiction
+            if (c_a and s_a) or (c_b and s_b):
+                continue
+            # Contradiction: claim asserts one polarity but evidence affirms the opposite (and not the claim's)
+            if c_a and s_b and not s_a:
+                return True, "Antonym contradiction between claim and evidence"
+            if c_b and s_a and not s_b:
                 return True, "Antonym contradiction between claim and evidence"
 
         # 2. Negation polarity inversion against matching evidence span
@@ -272,7 +289,10 @@ class CitationValidator:
 
         sentences = [
             s.strip() for s in re.split(r"(?<=[.!?])\s+", answer_text)
-            if len(s.strip()) > 8 and not s.strip().lower().startswith("sources:")
+            if len(s.strip()) > 8
+            and not s.strip().lower().startswith("sources:")
+            and not s.strip().lower().startswith("final answer:")
+            and not s.strip().startswith("\\boxed")
         ]
         if not sentences:
             return {
@@ -427,7 +447,13 @@ class CitationValidator:
         aligned_citations = 0
         total_cited_claims = 0
 
-        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", generated_answer) if len(s.strip()) > 8]
+        sentences = [
+            s.strip() for s in re.split(r"(?<=[.!?])\s+", generated_answer)
+            if len(s.strip()) > 8
+            and not s.strip().lower().startswith("sources:")
+            and not s.strip().lower().startswith("final answer:")
+            and not s.strip().startswith("\\boxed")
+        ]
         for idx, sent in enumerate(sentences, start=1):
             sent_citations = [int(m) for m in self.CITATION_PATTERN.findall(sent)]
             sent_clean = self.CITATION_PATTERN.sub("", sent).strip()

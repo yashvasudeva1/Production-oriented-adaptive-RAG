@@ -20,7 +20,10 @@ node_modules/
 frontend/node_modules/
 
 /documents
-/metadata
+/metadata/*
+!/metadata/canonical_benchmark_report.md
+!/metadata/canonical_benchmark_results.json
+!/metadata/frames_simplified_results.json
 /data
 
 # Local agent artifacts

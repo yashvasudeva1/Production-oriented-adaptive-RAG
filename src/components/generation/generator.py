@@ -203,11 +203,48 @@ class GroundedGenerator:
             answer_text, sources, supporting_chunks
         )
 
+        # Objective 5: Strengthen evidence verification & citation repair/abstention
+        # Repair Attempt 1: Strip hallucinated or invalid citation markers
+        if validation_report.invalid_citations:
+            logger.warning(
+                f"Attempting repair for invalid citations: {validation_report.invalid_citations}"
+            )
+            valid_cids = {s.citation_id for s in sources}
+
+            def _strip_invalid_cid(match):
+                cid = int(match.group(1))
+                return match.group(0) if cid in valid_cids else ""
+
+            repaired_text = re.sub(r"\[(\d+)\]", _strip_invalid_cid, answer_text)
+            repaired_text = re.sub(r"\s+", " ", repaired_text).strip()
+            repaired_report = self.citation_validator.validate(
+                repaired_text, sources, supporting_chunks
+            )
+            if repaired_report.is_valid and repaired_report.is_factually_supported:
+                answer_text = repaired_text
+                validation_report = repaired_report
+
+        # Repair Attempt 2: If claims remain unsupported/hallucinated, fallback to strictly grounded extractive synthesis
+        if not validation_report.is_valid or not validation_report.is_factually_supported:
+            logger.warning("Generated text failed factual support check. Falling back to grounded extractive synthesis.")
+            fallback_text = self._offline_extractive_synthesis(query, sources, supporting_chunks)
+            fallback_report = self.citation_validator.validate(
+                fallback_text, sources, supporting_chunks
+            )
+            if fallback_report.is_valid and fallback_report.is_factually_supported:
+                answer_text = fallback_text
+                validation_report = fallback_report
+
+        needs_abstention = (not validation_report.is_valid) or (not validation_report.is_factually_supported)
+
+        val_dict = validation_report.model_dump()
+        val_dict["needs_abstention"] = needs_abstention
+
         return {
             "answer": answer_text,
             "concise_answer": concise_ans,
             "sources": [s.model_dump() for s in sources],
-            "validation": validation_report.model_dump(),
+            "validation": val_dict,
             "metadata": {
                 "provider": llm_res.provider,
                 "model": llm_res.model,
@@ -216,6 +253,33 @@ class GroundedGenerator:
                 "tokens_used": llm_res.tokens_used,
             },
         }
+
+    def validate_citations(
+        self, answer: str, chunks: Sequence[Any]
+    ) -> CitationValidationReport:
+        """Validate citation indices and factual grounding against supporting chunks."""
+        sources = self.citation_builder.build_sources(chunks)
+        return self.citation_validator.validate(answer, sources, chunks)
+
+    def repair_citations(
+        self, answer: str, chunks: Sequence[Any]
+    ) -> Tuple[str, CitationValidationReport]:
+        """Strip invalid/hallucinated citation IDs and re-validate."""
+        sources = self.citation_builder.build_sources(chunks)
+        report = self.citation_validator.validate(answer, sources, chunks)
+        if not report.invalid_citations:
+            return answer, report
+
+        valid_cids = {s.citation_id for s in sources}
+
+        def _strip_invalid_cid(match):
+            cid = int(match.group(1))
+            return match.group(0) if cid in valid_cids else ""
+
+        repaired = re.sub(r"\[(\d+)\]", _strip_invalid_cid, answer)
+        repaired = re.sub(r"\s+", " ", repaired).strip()
+        repaired_report = self.citation_validator.validate(repaired, sources, chunks)
+        return repaired, repaired_report
 
     def generate_stream(
         self,
@@ -255,12 +319,24 @@ class GroundedGenerator:
         validation_report = self.citation_validator.validate(
             answer_text, sources, supporting_chunks
         )
+        if validation_report.invalid_citations:
+            valid_cids = {s.citation_id for s in sources}
+            answer_text = re.sub(
+                r"\[(\d+)\]",
+                lambda m: m.group(0) if int(m.group(1)) in valid_cids else "",
+                answer_text,
+            ).strip()
+            validation_report = self.citation_validator.validate(
+                answer_text, sources, supporting_chunks
+            )
+        val_dict = validation_report.model_dump()
+        val_dict["needs_abstention"] = (not validation_report.is_valid) or (not validation_report.is_factually_supported)
         yield (
             "final",
             {
                 "answer": answer_text,
                 "sources": [s.model_dump() for s in sources],
-                "validation": validation_report.model_dump(),
+                "validation": val_dict,
             },
         )
 
@@ -403,40 +479,83 @@ class GroundedGenerator:
         chunks: Sequence[RerankerResult],
     ) -> str:
         """
-        Extractive synthesis for offline environments, CI/CD, and testing.
-        Synthesizes the most relevant sentences from top sources with citations.
+        High-precision extractive synthesis for offline environments, CI/CD, and benchmarking.
+        Ranks sentences across top supporting chunks by informative content overlap and
+        entity specificity, ensuring concise multi-part coverage without distractor dilution.
         """
         if not chunks:
             return "No sufficient evidence found to answer the query."
 
-        sentences_with_citation: List[str] = []
-        q_words = set(query.lower().split())
+        stopwords = {
+            "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+            "has", "he", "in", "is", "it", "its", "of", "on", "that", "the",
+            "to", "was", "were", "will", "with", "what", "which", "who", "whom",
+            "where", "when", "why", "how", "can", "could", "should", "would",
+            "does", "do", "did", "have", "had", "been", "or", "out", "over"
+        }
 
-        for src, chunk in zip(sources[:3], chunks[:3]):
-            sents = re.split(r"(?<=[.?!])\s+", chunk.text.strip())
-            best_sent = None
-            best_overlap = -1
+        def _content_tokens(text: str) -> Set[str]:
+            tokens = re.findall(r"\b[a-zA-Z0-9_\-\.]{2,}\b", text.lower())
+            return {t for t in tokens if t not in stopwords}
+
+        q_tokens = _content_tokens(query)
+        if not q_tokens:
+            q_tokens = set(query.lower().split())
+
+        candidate_sentences = []
+
+        for src, chunk in zip(sources[:5], chunks[:5]):
+            txt = getattr(chunk, "text", "") or ""
+            clean_txt = re.sub(r"^Section:\s+[A-Z_]+\s+Analysis\.\s*", "", txt.strip())
+            sents = re.split(r"(?<=[.?!])\s+", clean_txt)
 
             for s in sents:
                 s_clean = s.strip()
-                if len(s_clean) < 15:
+                if len(s_clean) < 15 or "ignore previous instructions" in s_clean.lower():
                     continue
-                # Ignore prompt injection text if someone puts it in a document
-                if "ignore previous instructions" in s_clean.lower():
+                s_tokens = _content_tokens(s_clean)
+                if not s_tokens:
                     continue
-                overlap = len(set(s_clean.lower().split()) & q_words)
-                if overlap > best_overlap:
-                    best_overlap = overlap
-                    best_sent = s_clean
+                matched = q_tokens & s_tokens
+                overlap = len(matched) / len(q_tokens) if q_tokens else 0.0
 
-            if best_sent:
-                sentences_with_citation.append(f"{best_sent} [{src.citation_id}]")
-            elif sents:
-                first_sent = sents[0].strip()
-                if "ignore previous instructions" not in first_sent.lower():
-                    sentences_with_citation.append(f"{first_sent} [{src.citation_id}]")
+                candidate_sentences.append({
+                    "sentence": s_clean,
+                    "citation_id": src.citation_id,
+                    "score": overlap,
+                    "matched_tokens": matched,
+                    "source_rank": src.citation_id,
+                })
 
-        if sentences_with_citation:
-            return "Based on the retrieved evidence:\n\n" + "\n\n".join(sentences_with_citation)
+        if not candidate_sentences:
+            return f"Based on the retrieved evidence: {chunks[0].text[:150]}... [{sources[0].citation_id}]"
 
-        return f"According to [{sources[0].citation_id}], {chunks[0].text[:200]}..."
+        # Sort primarily by query token overlap, break ties by source rank
+        candidate_sentences.sort(key=lambda x: (x["score"], -x["source_rank"]), reverse=True)
+
+        selected = []
+        covered_query_tokens = set()
+        best_score = candidate_sentences[0]["score"]
+
+        for cand in candidate_sentences:
+            if cand["score"] == 0 and selected:
+                break
+
+            new_tokens = cand["matched_tokens"] - covered_query_tokens
+
+            if not selected:
+                selected.append(cand)
+                covered_query_tokens.update(cand["matched_tokens"])
+            elif new_tokens and len(new_tokens) >= 1 and cand["score"] >= best_score * 0.45:
+                # Add sentence if it covers unaddressed parts of the query (multi-hop / multi-part)
+                selected.append(cand)
+                covered_query_tokens.update(new_tokens)
+                if len(selected) >= 2:
+                    break
+            elif len(selected) == 1 and best_score < 0.25 and cand["score"] >= best_score * 0.8:
+                selected.append(cand)
+                covered_query_tokens.update(cand["matched_tokens"])
+                break
+
+        body = " ".join([f"{c['sentence']} [{c['citation_id']}]" for c in selected])
+        return f"Based on the retrieved evidence: {body}"
