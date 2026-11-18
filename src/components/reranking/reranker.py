@@ -71,8 +71,21 @@ class CrossEncoderReranker:
                 clean_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
         self.model_name = clean_name
+        self.model_revision = os.getenv("RERANKER_MODEL_REVISION", "v1")
+        self.max_seq_length = 384
         self.enabled = (clean_name or "").strip().lower() not in ("none", "", "disabled", "false", "0")
         self._model = None if self.enabled else False
+
+    @property
+    def cache_model_version(self) -> str:
+        """Revision key distinguishing neural cross-encoder vs lexical fallback and model revision."""
+        mode_tag = "lexical_fallback" if self._model is False else "cross_encoder"
+        return f"rev={self.model_revision}:mode={mode_tag}"
+
+    @property
+    def cache_config_version(self) -> str:
+        """Configuration key capturing sequence length and execution parameters."""
+        return f"max_len={self.max_seq_length}:device={self.device}:fast_cpu={self.fast_cpu}"
 
     def _load_model(self):
         if not self.enabled:
@@ -172,7 +185,7 @@ class CrossEncoderReranker:
         candidates: Sequence[UnifiedCandidate | Any],
         top_k: Optional[int] = None,
     ) -> List[RerankerResult]:
-        """Convert candidates directly to RerankerResult without cross-encoder inference."""
+        """Convert candidates directly to RerankerResult preserving incoming fusion/retrieval rank order."""
         k = top_k or self.default_top_k
         unique_cands: Dict[str, Any] = {}
         for c in candidates:
@@ -181,10 +194,21 @@ class CrossEncoderReranker:
                 unique_cands[cid] = c
 
         cand_list = list(unique_cands.values())[:k]
-        cand_list.sort(key=lambda c: (_get_field(c, 'dense_score', None) or _get_field(c, 'fusion_score', 0.0) or _get_field(c, 'score', 0.0)), reverse=True)
+
+        def _bypass_sort_key(c: Any) -> float:
+            fus = _get_field(c, "fusion_score", None)
+            if fus is not None:
+                return float(fus)
+            ds = _get_field(c, "dense_score", None)
+            if ds is not None:
+                return float(ds)
+            sc = _get_field(c, "score", None)
+            return float(sc) if sc is not None else 0.0
+
+        cand_list.sort(key=_bypass_sort_key, reverse=True)
         results: List[RerankerResult] = []
         for rank, c in enumerate(cand_list, start=1):
-            score = float(_get_field(c, 'dense_score', None) or _get_field(c, 'fusion_score', 0.0) or _get_field(c, 'score', 0.0))
+            score = _bypass_sort_key(c)
             results.append(
                 RerankerResult(
                     chunk_id=_get_field(c, "chunk_id", ""),
@@ -245,9 +269,20 @@ class CrossEncoderReranker:
         missing_indices: List[int] = []
         missing_pairs: List[List[str]] = []
 
+        # Ensure model state (loaded neural vs fallback) is known before computing cache key
+        self._load_model()
+        rrk_model_ver = self.cache_model_version
+        rrk_cfg_ver = self.cache_config_version
+
         for idx, c in enumerate(cand_list):
             c_text = _get_field(c, "text", "")
-            cached_s = cache_mgr.get_rerank_score(self.model_name, query, c_text)
+            cached_s = cache_mgr.get_rerank_score(
+                self.model_name,
+                query,
+                c_text,
+                model_version=rrk_model_ver,
+                config_version=rrk_cfg_ver,
+            )
             if cached_s is not None:
                 scores[idx] = float(cached_s)
             else:
@@ -255,7 +290,6 @@ class CrossEncoderReranker:
                 missing_pairs.append([query, c_text])
 
         if missing_pairs:
-            self._load_model()
             if self._model and self._model is not False:
                 try:
                     import torch
@@ -280,7 +314,14 @@ class CrossEncoderReranker:
             for midx, p_score in zip(missing_indices, pred_scores):
                 scores[midx] = float(p_score)
                 c_text = _get_field(cand_list[midx], "text", "")
-                cache_mgr.set_rerank_score(self.model_name, query, c_text, float(p_score))
+                cache_mgr.set_rerank_score(
+                    self.model_name,
+                    query,
+                    c_text,
+                    float(p_score),
+                    model_version=rrk_model_ver,
+                    config_version=rrk_cfg_ver,
+                )
 
         scored_results: List[RerankerResult] = []
         for cand, score in zip(cand_list, scores):

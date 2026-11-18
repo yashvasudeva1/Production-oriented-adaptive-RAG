@@ -70,11 +70,15 @@ class RAGOrchestrator:
         # Synchronize in-memory Qdrant with indexed BM25 chunks if Qdrant is empty
         if self.qdrant.count() == 0 and self.bm25.count() > 0:
             logger.info("Synchronizing in-memory Qdrant with indexed BM25 chunks...")
+            import hashlib
+            import re as _re
             from ..chunking.models import Chunk
             loaded = [Chunk.from_dict(c) for c in self.bm25._all_chunks]
             import numpy as np
             from pathlib import Path
-            cache_file = Path(__file__).resolve().parents[3] / "metadata" / f"chunk_embeddings_{self.embedder.dimension}.npz"
+            emb_rev = getattr(self.embedder, "cache_revision", f"{type(self.embedder).__name__}_{self.embedder.dimension}")
+            safe_rev = _re.sub(r"[^a-zA-Z0-9_.-]+", "_", emb_rev)
+            cache_file = Path(__file__).resolve().parents[3] / "metadata" / f"chunk_embeddings_{safe_rev}.npz"
             cached_dict = {}
             if cache_file.exists():
                 try:
@@ -82,16 +86,21 @@ class RAGOrchestrator:
                     cached_dict = {k: data[k] for k in data.files}
                 except Exception as c_exc:
                     logger.debug(f"Could not load vector cache {cache_file}: {c_exc}")
-            missing = [c for c in loaded if c.chunk_id not in cached_dict]
+
+            def _chunk_cache_key(ch: Chunk) -> str:
+                h = hashlib.sha256((ch.text or "").encode("utf-8")).hexdigest()[:16]
+                return f"{ch.chunk_id}__{h}"
+
+            missing = [c for c in loaded if _chunk_cache_key(c) not in cached_dict]
             if missing:
                 new_vecs = self.embedder.embed_texts([c.text for c in missing])
                 for c, v in zip(missing, new_vecs):
-                    cached_dict[c.chunk_id] = np.array(v, dtype=np.float32)
+                    cached_dict[_chunk_cache_key(c)] = np.array(v, dtype=np.float32)
                 try:
                     np.savez_compressed(cache_file, **cached_dict)
                 except Exception as s_exc:
                     logger.debug(f"Could not save vector cache: {s_exc}")
-            vecs = [cached_dict[c.chunk_id].tolist() for c in loaded]
+            vecs = [cached_dict[_chunk_cache_key(c)].tolist() for c in loaded]
             self.qdrant.upsert_chunks(loaded, vecs)
 
         self.dense_retriever = DenseRetriever(indexer=self.qdrant, embedder=self.embedder)
@@ -205,6 +214,7 @@ class RAGOrchestrator:
         candidate_document_ids: Optional[List[str]] = None,
         metadata_filter: Optional[Dict[str, Any]] = None,
         enable_consensus_guard: Optional[bool] = None,
+        intent_aware_rerank_budget: bool = False,
     ) -> Tuple[QueryPlan, RetrievalMetadata, EvidenceVerdict, Dict[str, float], float]:
         start_time = time.perf_counter()
         latencies: Dict[str, float] = {}
@@ -277,6 +287,8 @@ class RAGOrchestrator:
             rerank_top_k=plan.rerank_top_k,
             default_top_k=plan.top_k,
             enable_consensus_guard=enable_consensus_guard,
+            query_type=plan.query_type,
+            intent_aware_budget=intent_aware_rerank_budget,
         )
         latencies["reranking_ms"] = rerank_res.rerank_latency_ms
         active_candidates = rerank_res.candidates
@@ -330,6 +342,20 @@ class RAGOrchestrator:
         if not verdict.allowed:
             cascade_stages.append("abstention_gated")
 
+        # Record pre-generation retrieved candidates so retrieval evaluation is
+        # strictly decoupled from downstream evidence gating and citation validation.
+        pre_gen_candidates = [
+            {
+                "rank": idx,
+                "chunk_id": getattr(c, "chunk_id", ""),
+                "document_id": getattr(c, "document_id", ""),
+                "text": getattr(c, "text", ""),
+                "score": float(getattr(c, "rerank_score", None) or getattr(c, "score", 0.0) or 0.0),
+                "source_locator": getattr(c, "source_locator", None),
+            }
+            for idx, c in enumerate(final_context, start=1)
+        ]
+
         retrieval_meta = RetrievalMetadata(
             strategy=plan.query_type,
             query_type=plan.query_type,
@@ -341,12 +367,14 @@ class RAGOrchestrator:
             keyword_candidates=len(ret_result.raw_bm25_hits),
             fused_candidates=len(ret_result.candidates),
             reranked_candidates=len(active_candidates),
+            rerank_pool_size=rerank_res.rerank_pool_size,
             parent_expanded_count=parent_exp_count,
             filtered_context_candidates=len(final_context),
             confidence_score=verdict.confidence,
             confidence_tier=conf.tier if conf else None,
             confidence_signals=verdict.signals or (conf.signals if conf else {}),
             latency_breakdown_ms=latencies,
+            retrieved_candidates=pre_gen_candidates,
         )
 
         return plan, retrieval_meta, verdict, latencies, start_time
@@ -359,10 +387,11 @@ class RAGOrchestrator:
         verdict: EvidenceVerdict,
         latencies: Dict[str, float],
         start_time: float,
+        citation_validation: Optional[Dict[str, Any]] = None,
     ) -> RAGResponse:
         total_latency = (time.perf_counter() - start_time) * 1000
-        latencies["generation_ms"] = 0.0
-        latencies["retrieval_ms"] = max(0.0, total_latency - latencies.get("planning_ms", 0.0))
+        latencies["generation_ms"] = latencies.get("generation_ms", 0.0)
+        latencies["retrieval_ms"] = max(0.0, total_latency - latencies.get("planning_ms", 0.0) - latencies["generation_ms"])
         latencies["total_ms"] = total_latency
         return RAGResponse(
             query=query,
@@ -374,6 +403,7 @@ class RAGOrchestrator:
             execution_mode=retrieval_meta.execution_mode,
             sources=[],
             retrieval=retrieval_meta,
+            citation_validation=citation_validation or {},
             latency_ms=total_latency,
         )
 
@@ -385,6 +415,7 @@ class RAGOrchestrator:
         candidate_document_ids: Optional[List[str]] = None,
         metadata_filter: Optional[Dict[str, Any]] = None,
         enable_consensus_guard: Optional[bool] = None,
+        intent_aware_rerank_budget: bool = False,
     ) -> RAGResponse:
         """Execute a full production RAG query with strict evidence gating and citation repair."""
         plan, retrieval_meta, verdict, latencies, start_time = self._retrieve_and_gate(
@@ -394,6 +425,7 @@ class RAGOrchestrator:
             candidate_document_ids=candidate_document_ids,
             metadata_filter=metadata_filter,
             enable_consensus_guard=enable_consensus_guard,
+            intent_aware_rerank_budget=intent_aware_rerank_budget,
         )
 
         if not verdict.allowed:
@@ -413,7 +445,15 @@ class RAGOrchestrator:
                 confidence=verdict.confidence,
                 reason=val_meta.get("details") or "Answer failed factual citation verification.",
             )
-            return self._abstention_response(query, plan, retrieval_meta, verdict_rej, latencies, start_time)
+            return self._abstention_response(
+                query,
+                plan,
+                retrieval_meta,
+                verdict_rej,
+                latencies,
+                start_time,
+                citation_validation=val_meta,
+            )
 
         total_latency = (time.perf_counter() - start_time) * 1000
         latencies["retrieval_ms"] = max(

@@ -13,6 +13,7 @@ import csv
 import json
 import logging
 import os
+import sys
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone

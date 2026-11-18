@@ -7,10 +7,10 @@ import os
 import re
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 from ..reranker import RerankerResult
-from .citations import CitationBuilder, CitationSource, CitationValidator
+from .citations import CitationBuilder, CitationSource, CitationValidationReport, CitationValidator
 
 try:
     from config.models import get_config
@@ -172,7 +172,11 @@ class GroundedGenerator:
 
         from .providers import LLMResult
 
-        cache_key = hashlib.md5(f"{active_system_prompt}|||{prompt}".encode("utf-8")).hexdigest()
+        cache_payload = (
+            f"provider={self.router.primary_name}|model={self.router.primary_model}|"
+            f"temp={self.temperature}|mh={use_multi_hop}|sys={active_system_prompt}|||{prompt}"
+        )
+        cache_key = hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()
         if cache_key in self._gen_cache:
             cached_data = self._gen_cache[cache_key]
             llm_res = LLMResult(**cached_data) if isinstance(cached_data, dict) else cached_data

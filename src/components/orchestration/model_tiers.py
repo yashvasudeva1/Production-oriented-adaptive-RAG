@@ -3,6 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
+from ..retrieval.fusion import (
+    DEFAULT_BM25_WEIGHT,
+    DEFAULT_DENSE_WEIGHT,
+    IDENTIFIER_BM25_WEIGHT,
+    IDENTIFIER_DENSE_WEIGHT,
+)
+
 
 @dataclass(frozen=True)
 class TierModelSpec:
@@ -23,8 +30,10 @@ class TierModelSpec:
     license_info: str
     bm25_enabled: bool = True
     rrf_enabled: bool = True
-    rrf_bm25_weight: float = 0.82
-    rrf_dense_weight: float = 0.18
+    rrf_bm25_weight: float = DEFAULT_BM25_WEIGHT
+    rrf_dense_weight: float = DEFAULT_DENSE_WEIGHT
+    rrf_identifier_bm25_weight: float = IDENTIFIER_BM25_WEIGHT
+    rrf_identifier_dense_weight: float = IDENTIFIER_DENSE_WEIGHT
 
     def validate_embedding_model(self, model_name: str) -> bool:
         """Check if an embedding model is registered for this tier."""
@@ -52,8 +61,8 @@ MODEL_TIERS: Dict[str, TierModelSpec] = {
         license_info="Apache 2.0 / Gemma Terms (Free Open-Weights)",
         bm25_enabled=True,
         rrf_enabled=True,
-        rrf_bm25_weight=0.82,
-        rrf_dense_weight=0.18,
+        rrf_bm25_weight=DEFAULT_BM25_WEIGHT,
+        rrf_dense_weight=DEFAULT_DENSE_WEIGHT,
     ),
     "balanced": TierModelSpec(
         level=2,
@@ -68,8 +77,8 @@ MODEL_TIERS: Dict[str, TierModelSpec] = {
         license_info="Apache 2.0 / MIT (Free Open-Weights)",
         bm25_enabled=True,
         rrf_enabled=True,
-        rrf_bm25_weight=0.82,
-        rrf_dense_weight=0.18,
+        rrf_bm25_weight=DEFAULT_BM25_WEIGHT,
+        rrf_dense_weight=DEFAULT_DENSE_WEIGHT,
     ),
     "deep": TierModelSpec(
         level=3,
@@ -84,8 +93,8 @@ MODEL_TIERS: Dict[str, TierModelSpec] = {
         license_info="Apache 2.0 (Free Open-Weights)",
         bm25_enabled=True,
         rrf_enabled=True,
-        rrf_bm25_weight=0.82,
-        rrf_dense_weight=0.18,
+        rrf_bm25_weight=DEFAULT_BM25_WEIGHT,
+        rrf_dense_weight=DEFAULT_DENSE_WEIGHT,
     ),
 }
 

@@ -4,7 +4,7 @@ import hashlib
 import logging
 import re
 import time
-from typing import List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from ..chunking.models import Chunk
 from ..chunking.pipeline import ChunkingPipeline

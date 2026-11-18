@@ -24,7 +24,9 @@ frontend/node_modules/
 !/metadata/canonical_benchmark_report.md
 !/metadata/canonical_benchmark_results.json
 !/metadata/frames_simplified_results.json
+!/metadata/neural_validation_results.json
 /data
+/test-results/
 
 # Local agent artifacts
 AGENT_REFACTORING_SPEC.md

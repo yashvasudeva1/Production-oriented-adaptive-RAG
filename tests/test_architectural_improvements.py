@@ -108,10 +108,25 @@ def test_confidence_gate_conditional_weight_masking():
 
 def test_balanced_rrf_weights_and_k_constant():
     """
-    Verify Fix 2:
+    Verify reconciled RRF constants:
     - Default RRF constant is k=20 (down from 60)
-    - Default weights are 0.45 BM25 / 0.55 Dense (reflecting upgraded dense retriever)
+    - Default balanced weights are 0.50 BM25 / 0.50 Dense
+    - Identifier-specific weights are 0.55 BM25 / 0.45 Dense
     """
+    from src.components.retrieval.fusion import (
+        DEFAULT_BM25_WEIGHT,
+        DEFAULT_DENSE_WEIGHT,
+        DEFAULT_RRF_K,
+        IDENTIFIER_BM25_WEIGHT,
+        IDENTIFIER_DENSE_WEIGHT,
+    )
+
+    assert DEFAULT_RRF_K == 20
+    assert DEFAULT_BM25_WEIGHT == 0.50
+    assert DEFAULT_DENSE_WEIGHT == 0.50
+    assert IDENTIFIER_BM25_WEIGHT == 0.55
+    assert IDENTIFIER_DENSE_WEIGHT == 0.45
+
     bm25_cands = [
         SearchResult(chunk_id="doc_a", document_id="d1", text="bm25 first", score=12.0, rank=1, retriever_name="bm25"),
         SearchResult(chunk_id="doc_b", document_id="d2", text="bm25 second", score=8.0, rank=2, retriever_name="bm25"),
@@ -127,9 +142,20 @@ def test_balanced_rrf_weights_and_k_constant():
     # doc_b has consensus (rank 2 BM25 + rank 1 Dense) -> should rank #1
     assert fused[0].chunk_id == "doc_b"
 
-    # Verify that rank 1 under k=20 carries more weight: 1/(20+1) = 0.0476 vs 1/(60+1) = 0.0164
-    k20_top_dense = 0.55 * (1.0 / (20 + 1))
-    assert fused[0].score > k20_top_dense
+    # Verify exact k=20 score formula for doc_b: 0.50/(20+2) + 0.50/(20+1)
+    expected_doc_b = 0.50 * (1.0 / (20 + 2)) + 0.50 * (1.0 / (20 + 1))
+    assert abs(fused[0].score - expected_doc_b) < 1e-6
+
+    # Verify identifier-boosted weights [0.55 BM25, 0.45 Dense]
+    fused_id = reciprocal_rank_fusion(
+        bm25_results=bm25_cands,
+        dense_results=dense_cands,
+        bm25_weight=IDENTIFIER_BM25_WEIGHT,
+        dense_weight=IDENTIFIER_DENSE_WEIGHT,
+    )
+    expected_doc_a = 0.55 * (1.0 / (20 + 1))
+    doc_a_cand = next(c for c in fused_id if c.chunk_id == "doc_a")
+    assert abs(doc_a_cand.score - expected_doc_a) < 1e-6
 
 
 def test_blended_reranking_formula():

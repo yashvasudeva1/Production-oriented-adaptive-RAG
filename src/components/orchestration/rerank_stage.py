@@ -38,9 +38,13 @@ class RerankStage:
         rerank_top_k: int = 5,
         default_top_k: int = 5,
         enable_consensus_guard: Optional[bool] = None,
+        query_type: str = "general",
+        intent_aware_budget: bool = False,
     ) -> RerankStageResult:
         if not candidates:
-            return RerankStageResult(candidates=[], did_rerank=False, can_bypass=True, rerank_latency_ms=0.0)
+            return RerankStageResult(
+                candidates=[], did_rerank=False, can_bypass=True, rerank_pool_size=0, rerank_latency_ms=0.0
+            )
 
         exact_ids = exact_identifiers or []
         t0 = time.perf_counter()
@@ -65,6 +69,9 @@ class RerankStage:
             and (top1_agreement or has_unique_exact_id)
         )
 
+        # Broad analytical intents benefit from deeper rerank candidate pools when intent_aware_budget=True
+        BROAD_INTENTS = {"detailed", "comparison", "general", "summary", "summarization"}
+
         if mode == "hybrid_rerank":
             should_rerank = True
             rerank_pool = list(candidates)
@@ -76,8 +83,10 @@ class RerankStage:
             rerank_pool = list(candidates)
         else:
             should_rerank = True
-            # Tiered Micro-Rerank for Borderline Band (0.65 <= conf.score < 0.82)
-            if confidence_score >= 0.65:
+            if intent_aware_budget and query_type in BROAD_INTENTS:
+                rerank_pool = list(candidates[:10])
+            elif confidence_score >= 0.65:
+                # Baseline Tiered Micro-Rerank for Borderline Band (0.65 <= conf.score < 0.82)
                 rerank_pool = list(candidates[:6])
             else:
                 rerank_pool = list(candidates[:10])
@@ -90,9 +99,14 @@ class RerankStage:
                 max_candidates=len(rerank_pool),
             )
             did_rerank = True
+            scored_pool_size = len(rerank_pool)
         else:
-            reranked = self.reranker.bypass_rerank(list(candidates), top_k=default_top_k)
+            # Cap bypassed output to rerank_top_k (consistent context candidate budget across
+            # reranked and bypassed paths, preventing 12-25 unpruned pool chunks from entering ContextFilter).
+            effective_bypass_k = min(rerank_top_k, default_top_k) if rerank_top_k and default_top_k else (rerank_top_k or default_top_k)
+            reranked = self.reranker.bypass_rerank(list(candidates), top_k=effective_bypass_k)
             did_rerank = False
+            scored_pool_size = 0
 
         latency_ms = (time.perf_counter() - t0) * 1000
 
@@ -100,5 +114,6 @@ class RerankStage:
             candidates=reranked,
             did_rerank=did_rerank,
             can_bypass=can_full_bypass,
+            rerank_pool_size=scored_pool_size,
             rerank_latency_ms=latency_ms,
         )

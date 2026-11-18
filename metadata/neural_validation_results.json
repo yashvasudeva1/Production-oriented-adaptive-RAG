@@ -1,0 +1,54 @@
+{
+  "mode": "neural",
+  "timestamp": "2026-11-18T14:30:20Z",
+  "total_cases": 110,
+  "availability": {
+    "embedding": {
+      "status": "NOT_EXECUTED",
+      "model": "BAAI/bge-small-en-v1.5",
+      "dimension": null,
+      "reason": "Genuine weights unavailable locally (OSError: We couldn't connect to 'https://huggingface.co' to load the files, and couldn't find them in the cached files. Check your internet connection or see how to run )"
+    },
+    "cross_encoder": {
+      "status": "NOT_EXECUTED",
+      "model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+      "reason": "Genuine weights unavailable locally (OSError: We couldn't connect to 'https://huggingface.co' to load the files, and couldn't find them in the cached files. Check your internet connection or see how to run )"
+    },
+    "can_run_neural_dense": false,
+    "can_run_neural_rerank": false,
+    "can_run_full_neural_suite": false
+  },
+  "configurations": {
+    "BM25": {
+      "status": "AVAILABLE",
+      "requires_neural_embedding": false,
+      "requires_neural_reranker": false,
+      "reason": "Lexical BM25 requires no neural weights."
+    },
+    "DENSE": {
+      "status": "NOT_EXECUTED",
+      "requires_neural_embedding": true,
+      "requires_neural_reranker": false,
+      "reason": "Genuine weights unavailable locally (OSError: We couldn't connect to 'https://huggingface.co' to load the files, and couldn't find them in the cached files. Check your internet connection or see how to run )"
+    },
+    "HYBRID": {
+      "status": "NOT_EXECUTED",
+      "requires_neural_embedding": true,
+      "requires_neural_reranker": false,
+      "reason": "Genuine weights unavailable locally (OSError: We couldn't connect to 'https://huggingface.co' to load the files, and couldn't find them in the cached files. Check your internet connection or see how to run )"
+    },
+    "HYBRID_RERANK": {
+      "status": "NOT_EXECUTED",
+      "requires_neural_embedding": true,
+      "requires_neural_reranker": true,
+      "reason": "Genuine weights unavailable locally (OSError: We couldn't connect to 'https://huggingface.co' to load the files, and couldn't find them in the cached files. Check your internet connection or see how to run )"
+    },
+    "SIMPLIFIED_ADAPTIVE_GUARD": {
+      "status": "NOT_EXECUTED",
+      "requires_neural_embedding": true,
+      "requires_neural_reranker": true,
+      "reason": "Genuine weights unavailable locally (OSError: We couldn't connect to 'https://huggingface.co' to load the files, and couldn't find them in the cached files. Check your internet connection or see how to run )"
+    }
+  },
+  "executed_results": {}
+}

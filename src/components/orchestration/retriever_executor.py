@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import logging
 import time
 from typing import Any, Dict, List, Optional, Sequence
@@ -10,7 +11,15 @@ from ..indexing.bm25_indexer import BM25Indexer
 from ..indexing.models import SearchResult
 from ..indexing.qdrant_indexer import QdrantIndexer
 from ..retrieval.dense import DenseRetriever
-from ..retrieval.fusion import UnifiedCandidate, fuse_candidates
+from ..retrieval.fusion import (
+    DEFAULT_BM25_WEIGHT,
+    DEFAULT_DENSE_WEIGHT,
+    DEFAULT_RRF_K,
+    IDENTIFIER_BM25_WEIGHT,
+    IDENTIFIER_DENSE_WEIGHT,
+    UnifiedCandidate,
+    fuse_candidates,
+)
 from ..retrieval.keyword import KeywordRetriever
 from .contracts import RetrievalStageResult
 
@@ -45,6 +54,19 @@ class RetrieverExecutor:
         self.cache_enabled = cache_enabled
         self.fusion_method = fusion_method
 
+    def _keyword_cache_meta(self, signals: Dict[str, Any]) -> tuple[str, str]:
+        bm25_id = f"bm25:{getattr(self.bm25, 'index_path', 'mem')}:n={self.bm25.count()}"
+        sig_cfg = json.dumps(signals or {}, sort_keys=True, default=str)
+        return bm25_id, f"signals={sig_cfg}"
+
+    def _dense_cache_meta(self) -> tuple[str, str]:
+        emb = getattr(self.dense_retriever, "embedder", None)
+        emb_rev = getattr(emb, "cache_revision", f"{type(emb).__name__}:dim={getattr(emb, 'dimension', 0)}")
+        coll = getattr(self.qdrant, "collection_name", "default")
+        model_info = f"dense:{emb_rev}:coll={coll}:n={self.qdrant.count()}"
+        cfg_ver = f"fusion={self.fusion_method}:rrf_k={DEFAULT_RRF_K}"
+        return model_info, cfg_ver
+
     def search_keyword(
         self,
         query: str,
@@ -57,7 +79,15 @@ class RetrieverExecutor:
         if self.cache_enabled:
             cache_mgr = CacheManager.get_instance()
             filt_key = (str(metadata_filter), tuple(sorted(candidate_document_ids or [])))
-            cached = cache_mgr.get_retrieval(query=query, filter_repr=filt_key, top_k=top_k, mode="keyword")
+            model_info, cfg_ver = self._keyword_cache_meta(signals)
+            cached = cache_mgr.get_retrieval(
+                query=query,
+                filter_repr=filt_key,
+                top_k=top_k,
+                mode="keyword",
+                model_info=model_info,
+                config_version=cfg_ver,
+            )
             if cached is not None:
                 return cached
 
@@ -71,7 +101,16 @@ class RetrieverExecutor:
 
         if self.cache_enabled:
             filt_key = (str(metadata_filter), tuple(sorted(candidate_document_ids or [])))
-            cache_mgr.set_retrieval(query=query, filter_repr=filt_key, top_k=top_k, mode="keyword", results=results)
+            model_info, cfg_ver = self._keyword_cache_meta(signals)
+            cache_mgr.set_retrieval(
+                query=query,
+                filter_repr=filt_key,
+                top_k=top_k,
+                mode="keyword",
+                results=results,
+                model_info=model_info,
+                config_version=cfg_ver,
+            )
         return results
 
     def search_dense(
@@ -85,7 +124,15 @@ class RetrieverExecutor:
         if self.cache_enabled:
             cache_mgr = CacheManager.get_instance()
             filt_key = (str(metadata_filter), tuple(sorted(candidate_document_ids or [])))
-            cached = cache_mgr.get_retrieval(query=query, filter_repr=filt_key, top_k=top_k, mode="dense")
+            model_info, cfg_ver = self._dense_cache_meta()
+            cached = cache_mgr.get_retrieval(
+                query=query,
+                filter_repr=filt_key,
+                top_k=top_k,
+                mode="dense",
+                model_info=model_info,
+                config_version=cfg_ver,
+            )
             if cached is not None:
                 return cached
 
@@ -115,7 +162,16 @@ class RetrieverExecutor:
 
         if self.cache_enabled:
             filt_key = (str(metadata_filter), tuple(sorted(candidate_document_ids or [])))
-            cache_mgr.set_retrieval(query=query, filter_repr=filt_key, top_k=top_k, mode="dense", results=results)
+            model_info, cfg_ver = self._dense_cache_meta()
+            cache_mgr.set_retrieval(
+                query=query,
+                filter_repr=filt_key,
+                top_k=top_k,
+                mode="dense",
+                results=results,
+                model_info=model_info,
+                config_version=cfg_ver,
+            )
         return results
 
     def execute_retrieval(
@@ -210,14 +266,23 @@ class RetrieverExecutor:
         latencies["dense_ms"] = dt_ret * 0.7
         latencies["bm25_ms"] = dt_ret * 0.3
 
-        # Additive Reciprocal Rank Fusion (k=20) with exact-match protection and soft boost
+        # Additive Reciprocal Rank Fusion (k=DEFAULT_RRF_K=20) with exact-match protection and soft boost
+        # Default balanced weights: [0.50 BM25, 0.50 Dense]
+        # Exact technical identifier weights: [0.55 BM25, 0.45 Dense]
         t_fuse = time.perf_counter()
         valid_candidate_lists = [r for r in [kw_hits, dense_hits] if r]
-        fuse_weights = [0.55, 0.45] if (exact_ids and len(valid_candidate_lists) == 2) else None
+        if len(valid_candidate_lists) == 2:
+            fuse_weights = (
+                [IDENTIFIER_BM25_WEIGHT, IDENTIFIER_DENSE_WEIGHT]
+                if exact_ids
+                else [DEFAULT_BM25_WEIGHT, DEFAULT_DENSE_WEIGHT]
+            )
+        else:
+            fuse_weights = None
         fused = fuse_candidates(
             valid_candidate_lists,
             method=self.fusion_method,
-            k=20,
+            k=DEFAULT_RRF_K,
             top_n=max(15, top_k_dense * 2),
             exact_identifiers=exact_ids,
             inferred_document_ids=inferred_ids,

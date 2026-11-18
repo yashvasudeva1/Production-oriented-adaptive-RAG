@@ -9,7 +9,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -531,11 +531,32 @@ class OfflineExtractiveProvider(BaseLLMProvider):
             sources_text = prompt
             query = ""
 
+        stopwords = {
+            "a", "an", "and", "are", "as", "at", "be", "been", "being", "by", "can",
+            "could", "did", "do", "does", "for", "from", "had", "has", "have", "he",
+            "her", "his", "how", "in", "into", "is", "it", "its", "may", "might",
+            "must", "of", "on", "or", "our", "out", "over", "she", "should", "that",
+            "the", "their", "them", "they", "this", "these", "those", "to", "was",
+            "we", "were", "what", "when", "where", "which", "who", "whom", "why",
+            "will", "with", "would", "you", "your",
+        }
+
         q_lower = query.lower()
-        q_words = set(re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", q_lower))
+        raw_q_words = re.findall(r"\b[a-zA-Z0-9_\-\.]{2,}\b", q_lower)
+        q_words = {w for w in raw_q_words if w not in stopwords}
+        if not q_words:
+            q_words = set(raw_q_words)
 
         # Identify target answer categories
-        is_multi_hop = "multi-hop" in system_prompt.lower() or len(query.split()) >= 12
+        explicit_multi_hop_prompt = "multi-hop" in system_prompt.lower()
+        is_multi_part = (
+            query.count(",") >= 1
+            or " and " in q_lower
+            or "compare" in q_lower
+            or "summary" in q_lower
+            or "summarize" in q_lower
+            or explicit_multi_hop_prompt
+        )
         needs_ranking = bool(re.search(r"\b(rank|tallest|largest|highest|lowest|first|second|third|fourth|fifth|last)\b", q_lower))
         needs_year = bool(re.search(r"\b(year|years|when|date|month)\b", q_lower))
         needs_quantity = bool(re.search(r"\b(how many|how much|duration|count|percentage|length|rate|difference|score|dimension|marks)\b", q_lower))
@@ -544,12 +565,12 @@ class OfflineExtractiveProvider(BaseLLMProvider):
         # Parse source blocks: "Source [1] (filename, locator):\ntext..." or "[1] text..."
         source_blocks = re.split(r"(?:Source\s+)?\[(\d+)\](?:\s*\([^)]*\))?:?\s*", sources_text)
         sentences_with_citation: List[str] = []
-        extracted_facts: List[Tuple[str, str, int]] = []
+        all_sentence_candidates: List[Dict[str, Any]] = []
         scored_candidates: List[Tuple[float, str]] = []
 
         seen_canonical = set()
         if len(source_blocks) >= 3:
-            for i in range(1, len(source_blocks), 2):
+            for block_idx, i in enumerate(range(1, len(source_blocks), 2), start=1):
                 citation_id = source_blocks[i].strip()
                 block_text = source_blocks[i + 1].strip() if i + 1 < len(source_blocks) else ""
                 if not block_text:
@@ -558,12 +579,12 @@ class OfflineExtractiveProvider(BaseLLMProvider):
                 # Normalize whitespace and strip internal linebreaks within the block
                 block_text = re.sub(r"[\r\n]+", " ", block_text)
                 sents = re.split(r"(?<=[.?!])\s+", block_text)
-                scored_sents = []
-                for s in sents:
+                block_scored = []
+                for sent_idx, s in enumerate(sents):
                     s_clean = re.sub(r"\s+", " ", s.strip())
-                    # Strip leading section headers like "3.2.2 Multi-Head Attention " or "Table 3: "
+                    # Strip leading numbered/table/section headings
                     s_clean = re.sub(
-                        r"^(?:\d+(?:\.\d+)*\s+[A-Z][A-Za-z\s-]{2,40}\b|Table\s+\d+:?|Figure\s+\d+:?)\s*",
+                        r"^(?:\d+(?:\.\d+)*\s+[A-Z][A-Za-z\s-]{2,40}\b|Table\s+\d+:?|Figure\s+\d+:?|Section:\s+[A-Za-z0-9_\s-]{2,40}\.)\s*",
                         "",
                         s_clean,
                     ).strip()
@@ -574,29 +595,45 @@ class OfflineExtractiveProvider(BaseLLMProvider):
                     canonical = re.sub(r"[^a-zA-Z0-9]", "", s_clean.lower())[:80]
                     if canonical in seen_canonical:
                         continue
+                    seen_canonical.add(canonical)
 
-                    s_words = set(re.findall(r"\b[a-zA-Z0-9_\-\.]{3,}\b", s_clean.lower()))
-                    overlap = len(s_words & q_words)
+                    s_words = {w for w in re.findall(r"\b[a-zA-Z0-9_\-\.]{2,}\b", s_clean.lower()) if w not in stopwords}
+                    matched = s_words & q_words
+                    coverage = (len(matched) / len(q_words)) if q_words else 0.0
 
-                    salience = overlap * 2
+                    # Base salience from informative query coverage + term matches
+                    salience = (coverage * 12.0) + (len(matched) * 1.5)
+                    # Mild prior favoring top-ranked retrieved source
+                    salience += max(0.0, (4 - block_idx) * 0.4)
+
                     if needs_ranking and re.search(r"\b\d+(?:st|nd|rd|th)\b|\b(tallest|largest|fourth|first)\b", s_clean, re.IGNORECASE):
-                        salience += 6
+                        salience += 6.0
                     if needs_year and re.search(r"\b(18|19|20)\d{2}\b", s_clean):
-                        salience += 5
+                        salience += 4.0
                     if needs_quantity and re.search(r"\b\d+(?:,\d+)*(?:\.\d+)?%?\b", s_clean):
-                        salience += 5
+                        salience += 4.5
                     if needs_name and re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", s_clean):
-                        salience += 4
+                        salience += 3.5
 
-                    scored_sents.append((salience, s_clean, canonical))
+                    entry = {
+                        "citation_id": citation_id,
+                        "source_rank": block_idx,
+                        "sent_idx": sent_idx,
+                        "sentence": s_clean,
+                        "salience": salience,
+                        "coverage": coverage,
+                        "matched": matched,
+                    }
+                    all_sentence_candidates.append(entry)
+                    block_scored.append(entry)
 
-                if scored_sents:
-                    scored_sents.sort(key=lambda x: x[0], reverse=True)
-                    best_sal, best_sent, best_can = scored_sents[0]
-                    seen_canonical.add(best_can)
-                    extracted_facts.append((citation_id, best_sent, best_sal))
+                if block_scored:
+                    block_scored.sort(key=lambda x: x["salience"], reverse=True)
+                    best_entry = block_scored[0]
+                    best_sent = best_entry["sentence"]
+                    best_sal = best_entry["salience"]
 
-                    # Extract candidate answer spans from high-salience sentences with prioritized scoring
+                    # Extract candidate concise answer spans from high-salience sentences
                     if needs_ranking:
                         ord_matches = re.findall(r"\b\d+(?:st|nd|rd|th)\b", best_sent, re.IGNORECASE)
                         for om in ord_matches:
@@ -607,7 +644,7 @@ class OfflineExtractiveProvider(BaseLLMProvider):
                             if qm.strip() and qm.strip().lower() not in q_lower:
                                 scored_candidates.append((best_sal + 20.0, qm.strip()))
                     if needs_year:
-                        year_matches = re.findall(r"\b(18|19|20)\d{2}\b", best_sent)
+                        year_matches = re.findall(r"\b(?:18|19|20)\d{2}\b", best_sent)
                         for ym in year_matches:
                             if ym not in query:
                                 scored_candidates.append((best_sal + 15.0, ym))
@@ -621,9 +658,42 @@ class OfflineExtractiveProvider(BaseLLMProvider):
                             if len(nm) >= 3 and nm.lower() not in q_lower:
                                 scored_candidates.append((best_sal + 5.0, nm))
 
-            # Ensure multi-hop representation across sources
-            for cit_id, sent, _ in extracted_facts:
-                sentences_with_citation.append(f"{sent} [{cit_id}]")
+            # Greedy query-coverage selection: select highest-salience grounded sentences
+            # that directly answer the question, adding additional sentences ONLY when they
+            # cover genuinely unaddressed informative query terms (eliminating distractor noise).
+            if all_sentence_candidates:
+                all_sentence_candidates.sort(
+                    key=lambda x: (x["salience"], len(x["matched"]), -x["source_rank"]),
+                    reverse=True,
+                )
+                selected: List[Dict[str, Any]] = [all_sentence_candidates[0]]
+                covered_tokens = set(all_sentence_candidates[0]["matched"])
+                top_salience = all_sentence_candidates[0]["salience"]
+                max_sentences = 3 if is_multi_part else 2
+
+                for cand in all_sentence_candidates[1:]:
+                    if len(selected) >= max_sentences:
+                        break
+                    if not cand["matched"]:
+                        continue
+                    new_tokens = cand["matched"] - covered_tokens
+                    same_primary_source = cand["source_rank"] == selected[0]["source_rank"]
+                    current_coverage = (len(covered_tokens) / len(q_words)) if q_words else 1.0
+                    # If the primary sentence already covers >= 75% of query terms on a simple query, stop
+                    if not is_multi_part and current_coverage >= 0.75:
+                        break
+                    # Require meaningful new query-term coverage and competitive salience
+                    min_sal_ratio = 0.40 if same_primary_source else 0.60
+                    min_new_terms = 1 if (same_primary_source and is_multi_part) else 2
+                    if len(new_tokens) >= min_new_terms and cand["salience"] >= top_salience * min_sal_ratio:
+                        selected.append(cand)
+                        covered_tokens.update(new_tokens)
+
+                # Preserve natural reading order within the same source while keeping highest-salience source first
+                primary_rank = selected[0]["source_rank"]
+                selected.sort(key=lambda x: (0 if x["source_rank"] == primary_rank else x["source_rank"], x["sent_idx"]))
+                for item in selected:
+                    sentences_with_citation.append(f"{item['sentence']} [{item['citation_id']}]")
         else:
             block_text = re.sub(r"[\r\n]+", " ", sources_text)
             sents = re.split(r"(?<=[.?!])\s+", block_text)
@@ -641,7 +711,7 @@ class OfflineExtractiveProvider(BaseLLMProvider):
                     continue
                 seen_canonical.add(canonical)
                 sentences_with_citation.append(f"{s_clean} [1]")
-                if len(sentences_with_citation) >= 3:
+                if len(sentences_with_citation) >= 2:
                     break
 
         scored_candidates.sort(key=lambda x: x[0], reverse=True)
@@ -649,13 +719,18 @@ class OfflineExtractiveProvider(BaseLLMProvider):
 
         latency = (time.perf_counter() - t0) * 1000
 
+        # Only emit boxed multi-hop final answer when the multi-hop prompt is active AND the query
+        # asks a multi-hop/ranking/calculation entity question (not standard summarization/factual prose).
+        has_boxed_pattern = bool(
+            needs_ranking
+            or re.search(
+                r"\b(how many (years|days|months|times)|difference between|dewey decimal|who was the .* of the)\b",
+                q_lower,
+            )
+        )
         if sentences_with_citation:
-            if len(sentences_with_citation) == 1:
-                base_answer = f"According to the source documentation, {sentences_with_citation[0]}"
-            else:
-                formatted_items = "\n".join([f"- {s}" for s in sentences_with_citation[:4]])
-                base_answer = f"Based on the retrieved evidence:\n\n{formatted_items}"
-            if is_multi_hop and answer_candidates:
+            base_answer = " ".join(sentences_with_citation)
+            if explicit_multi_hop_prompt and has_boxed_pattern and answer_candidates:
                 top_ans = answer_candidates[0]
                 ans = f"{base_answer}\n\nFinal Answer: \\boxed{{{top_ans}}}"
             else:

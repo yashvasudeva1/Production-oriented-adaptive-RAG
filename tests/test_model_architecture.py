@@ -346,8 +346,10 @@ def test_model_tier_specifications():
     assert fast.default_reranker == "none"
     assert fast.bm25_enabled is True
     assert fast.rrf_enabled is True
-    assert fast.rrf_bm25_weight == 0.82
-    assert fast.rrf_dense_weight == 0.18
+    assert fast.rrf_bm25_weight == 0.50
+    assert fast.rrf_dense_weight == 0.50
+    assert fast.rrf_identifier_bm25_weight == 0.55
+    assert fast.rrf_identifier_dense_weight == 0.45
 
     # Balanced tier (Level 2)
     balanced = get_tier_spec("balanced")

@@ -4,9 +4,9 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
 [![Qdrant](https://img.shields.io/badge/Qdrant-Vector%20DB-red.svg)](https://qdrant.tech)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/Tests-165%20Passed-brightgreen.svg)](tests/)
-[![Google FRAMES](https://img.shields.io/badge/Google%20FRAMES-88%25%20Traversal%20%7C%2025ms%20P50-blueviolet.svg)](FRAMES_EVALUATION_REPORT.md)
-[![Canonical Benchmark](https://img.shields.io/badge/Canonical%20Benchmark-110%20Held--Out-blue.svg)](metadata/canonical_benchmark_report.md)
+[![Tests Passing](https://img.shields.io/badge/Tests-186%20Passed-brightgreen.svg)](tests/)
+[![Google FRAMES](https://img.shields.io/badge/Google%20FRAMES-50%20Cases%20(Historical%20Baseline)-blueviolet.svg)](FRAMES_EVALUATION_REPORT.md)
+[![Canonical Benchmark](https://img.shields.io/badge/Canonical%20Benchmark-90%20Answerable%20%7C%2020%20Unanswerable-blue.svg)](metadata/canonical_benchmark_report.md)
 
 **Nexus** (NexusRAG) is an enterprise-grade, latency-aware, retrieval-quality-aware Retrieval-Augmented Generation (RAG) platform. Instead of indiscriminately executing an expensive vector-search + cross-encoder cascade on every request, Nexus implements a **6-stage latency-aware adaptive pipeline** featuring dual-filter extraction, consensus-gated reranking, blended cross-encoder scoring, multi-hop bridge consolidation, and bidirectional citation verification.
 
@@ -60,7 +60,7 @@ USER QUERY / STREAMING UI
 │    └── Lexical BM25Okapi / FastEmbed BM25 Native Pre-Scoring Filter
 │
 ├──► STAGE 03: CALIBRATED MULTI-STRATEGY RANK FUSION
-│    ├── Balanced Reciprocal Rank Fusion (RRF, k=20, 0.55 Dense / 0.45 BM25)
+│    ├── Balanced Reciprocal Rank Fusion (RRF, k=20, default 0.50/0.50; 0.55 BM25/0.45 Dense on exact identifiers)
 │    └── Deep Mode: Per-Sub-Query Fusion & Low-Signal Thresholding (>= 0.40 Top)
 │
 ├──► STAGE 04: EVIDENCE CONFIDENCE ESTIMATION & TOP-1 CONSENSUS GUARD
@@ -121,7 +121,8 @@ $$
 $$
 
 - **Calibrated Smoothing Constant**: Lowered from the historical default of $k=60$ to $k=20$. This sharpens separation between top-ranked items and mediocre tail items.
-- **Rebalanced Weights**: Optimized to $0.55 \text{ Dense} / 0.45 \text{ BM25}$ (or configurable to $0.82 \text{ BM25} / 0.18 \text{ Dense}$ for exact-match technical domains).
+- **Default Balanced Weights**: $w_{\text{BM25}} = 0.50$, $w_{\text{Dense}} = 0.50$ — equal weight across both channels in the absence of lexical cues (implemented in `src/components/retrieval/fusion.py`, default arguments).
+- **Dynamic Identifier Boost**: When exact technical identifiers are detected in the query (snake\_case, camelCase, known acronyms — see `src/components/query/signals.py`), fusion weights shift to $w_{\text{BM25}} = 0.55 / w_{\text{Dense}} = 0.45$, protecting high-IDF lexical precision against dense distractors. This is applied in `src/components/orchestration/retriever_executor.py` only when `exact_identifiers` is non-empty.
 - **Sub-Query Relevance Thresholding**: In multi-query and decomposed retrieval, low-signal candidate chunks scoring $< 0.40 \cdot \text{top\_sub\_score}$ are pruned before global pool merging, preventing multi-hop context pollution.
 
 ### 4. Continuous Confidence Estimation & Top-1 Consensus Guard
@@ -194,54 +195,73 @@ In offline evaluation or zero-cost execution (`OFFLINE_EVAL=1`), generation rout
 
 ## Comprehensive Empirical Benchmarks & Evaluation
 
-All metrics below were measured on the actual codebase (chunking, Qdrant HNSW, BM25, cross-encoder, planning, and evaluation engines) running on commodity CPU.
+All evaluation tracks below are explicitly classified by execution status so offline synthetic tests, real lexical models, `NOT_EXECUTED` neural runs, and historical/simulated FRAMES baselines are never conflated:
 
-### 1. Canonical Engineering Milestone Benchmark (110 Held-Out Cases)
+| Evaluation Track | Execution Status | Backend / Corpus | Interpretability Scope |
+| :--- | :---: | :--- | :--- |
+| **Canonical 110-Query Retrieval (`BM25`)** | **EXECUTED (Real Lexical Model, Synthetic Corpus)** | `BM25Okapi` on 130-chunk synthetic corpus | Real lexical retriever on controlled 130-chunk corpus |
+| **Canonical 110-Query Retrieval (`DENSE`, `HYBRID`, `HYBRID_RERANK`, `SIMPLIFIED_ADAPTIVE_*`)** | **EXECUTED (Offline Synthetic)** | `MockEmbedder(dim=128)` + `lexical_fallback` (~0.2ms) + `OfflineExtractiveProvider` | Pipeline plumbing, RRF math, gating, and abstention verification only; **not** neural quality or real CE latency |
+| **Real-Model Neural Suite (`--mode neural`)** | **NOT_EXECUTED** | Target: `BAAI/bge-small-en-v1.5` + `cross-encoder/ms-marco-MiniLM-L-6-v2` | Genuine HuggingFace weights unavailable locally offline; zero mock substitution |
+| **Semantic Answer Eval (Embedding Cosine & LLM-as-a-Judge RAGAS)** | **NOT_EXECUTED** | Target: Neural SentenceTransformer + Online LLM Judge | Offline mode (`OFFLINE_EVAL=1`) & uncached weights |
+| **Google FRAMES Multi-Hop ([FRAMES_EVALUATION_REPORT.md](FRAMES_EVALUATION_REPORT.md))** | **HISTORICAL / SIMULATED** | Historical live runs (550-chunk Wikipedia corpus) + simulated `SIMPLIFIED_ADAPTIVE` replay | Raw 550-chunk corpus not packaged; `SIMPLIFIED_ADAPTIVE` row is simulation replay only |
+
+### 1. Canonical Engineering Milestone Benchmark (90 Answerable + 20 Unanswerable Held-Out Cases — Offline Synthetic Mode)
 
 > [!IMPORTANT]
-> **Evaluation Parameters & Provenance**:
-> - **Run ID:** eval_run_1794936962 | **Timestamp:** 2026-11-17T17:36:02Z | **Git Commit:** c7ef06329d289f28249f8de8dd7314abf06cf91d
-> - **Dataset:** 110 held-out cases (90 answerable across multi-domains, 20 unanswerable/adversarial)
-> - **Execution Mode:** Deterministic Offline Grounded (Local CPU, zero network calls, exact reproducibility)
-> - **Cache State:** Cold cache per query (CacheManager.clear() between evaluations)
+> **Evaluation Parameters & Provenance** (auto-generated from raw per-query results via `python scripts/run_production_benchmark.py --mode offline_synthetic`; real-model readiness check via `--mode neural`):
+> - **Run ID:** `eval_run_1795012088` | **Timestamp:** `2026-11-18T14:28:08Z` | **Dataset:** 110 held-out cases (90 answerable, 20 unanswerable/adversarial)
+> - **RRF Configuration:** `k=20`, default `0.50 BM25 / 0.50 Dense`, identifier boost `0.55 BM25 / 0.45 Dense`
+> - **Backends:** `BM25Okapi` (real lexical) | `MockEmbedder(dim=128)` (synthetic) | Reranker: `lexical_fallback` (~0.2ms CPU fallback; neural weights uncached offline)
+> - **Statistical Methodology:** Wilson score 95% CI for binary proportions (`Recall@5`, `Unans True Abst`); 10,000-resample percentile bootstrap 95% CI (`seed=42`) for continuous metrics & paired differences; Holm-Bonferroni FWER adjustment across 3 documented comparison families (`retrieval_quality`, `generation_quality`, `latency`); zero-variance pairs explicitly distinguished as `Observed Equal (0 var; TOST N/A)` rather than statistically established population equivalence
+> - **Cache State:** Cold cache per query (`CacheManager.clear()` + `generator._gen_cache.clear()`)
 > - **Latency Scope:** Full end-to-end pipeline latency per query in milliseconds (retrieval + fusion + rerank + extractive synthesis + validation)
 > - **Canonical Report Artifact:** [canonical_benchmark_report.md](metadata/canonical_benchmark_report.md)
-> - **Evaluation Note:** The table below reports on the full 110-case evaluation suite (90 answerable + 20 unanswerable). In accordance with production evaluation standards, successful abstention on unanswerable queries is rewarded with full retrieval credit (`recall=1.0`, `mrr=1.0`). On the isolated **90 answerable queries alone**, standard IR metrics are: BM25 Recall@5 = 1.0000, MRR = 0.9704; Simplified Adaptive Recall@5 = 0.9667, MRR = 0.9287. See the [Canonical Report](metadata/canonical_benchmark_report.md) for the complete breakdown.
+> - **Protocol:** Retrieval metrics (`Recall@5`, `Precision@5`, `MRR`, `nDCG@5`) are computed **exclusively on the 90 answerable queries** using **pre-generation retrieved candidates** (`resp.retrieval.retrieved_candidates`), strictly decoupled from citation validation and abstention. Unanswerable queries (N=20) are never assigned `Recall=1` or `MRR=1`.
 
-#### Controlled 6-Way Architectural Ablation Table
+> [!WARNING]
+> **Synthetic & Offline Benchmark Limitations:** This reproducible benchmark uses a 130-chunk synthetic corpus (90 target + 40 distractor chunks), `MockEmbedder(dim=128)` (hash projections, not semantic neural embeddings), and a ~0.2ms lexical reranker fallback (not a ~150ms neural cross-encoder). Neural Embedding Cosine, LLM-as-a-Judge RAGAS, and `--mode neural` HuggingFace evaluations (`BAAI/bge-small-en-v1.5`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) are explicitly marked `NOT_EXECUTED` offline (never substituted with mocks).
 
-| Configuration | Recall@5 (95% CI) | Prec@5 | MRR | nDCG@5 | Answer Correctness | Faithfulness | Citation Acc | Abstention Qual | Bypass Rate | P50 / P95 / P99 Latency |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **BM25** | 0.991 [0.964, 1.000] | 0.771 | 0.967 | 0.929 | 0.409 | 0.933 | 1.000 | 0.991 | 100.0% | 5.4ms / 7.5ms / 8.2ms |
-| **DENSE** | 0.909 [0.855, 0.955] | 0.534 | 0.871 | 0.858 | 0.345 | 0.923 | 1.000 | 0.918 | 0.0% | 4.2ms / 7.5ms / 9.2ms |
-| **HYBRID** | 0.918 [0.864, 0.973] | 0.575 | 0.762 | 0.704 | 0.293 | 0.936 | 1.000 | 0.973 | 100.0% | 16.7ms / 29.1ms / 31.0ms |
-| **HYBRID_RERANK** | 0.964 [0.927, 0.991] | 0.689 | 0.929 | 0.893 | 0.345 | 0.933 | 1.000 | 0.982 | 0.0% | 16.5ms / 27.0ms / 28.5ms |
-| **SIMPLIFIED_ADAPTIVE_NO_GUARD** | 0.964 [0.927, 0.991] | 0.696 | 0.939 | 0.914 | 0.345 | 0.933 | 1.000 | 0.982 | 6.4% | 8.0ms / 20.9ms / 23.9ms |
-| **SIMPLIFIED_ADAPTIVE_GUARD** | 0.964 [0.927, 0.991] | 0.685 | 0.933 | 0.900 | 0.340 | 0.933 | 1.000 | 0.982 | 12.7% | **7.7ms / 11.5ms / 21.6ms** |
+#### Primary Retrieval Quality (Answerable Queries Only, N=90, Pre-Generation)
 
-#### Formal Equivalence & Significance Testing (TOST within ±0.03 Margin)
+| Configuration | Execution Class | Recall@5 (Wilson 95% CI) | Prec@5 | MRR (Boot 95% CI) | nDCG@5 (Boot 95% CI) | CE Inv / Byp | Mean CE Pairs | P50 / P95 / P99 Latency (All 110) |
+| :--- | :---: | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
+| **BM25** | Real Lexical | 1.0000 [0.9591, 1.0000] | 0.7311 | 0.9704 [0.9426, 0.9944] | 0.9246 [0.8989, 0.9478] | N/A | N/A | 5.3ms / 7.4ms / 9.2ms |
+| **DENSE** | Offline Synthetic | 0.9333 [0.8621, 0.9691] | 0.4711 | 0.8870 [0.8259, 0.9389] | 0.8678 [0.8105, 0.9169] | N/A | N/A | 3.8ms / 6.2ms / 6.7ms |
+| **HYBRID** | Offline Synthetic | 1.0000 [0.9591, 1.0000] | 0.6600 | 0.9704 [0.9426, 0.9944] | 0.9191 [0.8904, 0.9444] | N/A | N/A | 5.2ms / 10.8ms / 11.8ms |
+| **HYBRID_RERANK** | Offline Synthetic | 1.0000 [0.9591, 1.0000] | 0.6711 | 0.9648 [0.9333, 0.9889] | 0.9254 [0.9004, 0.9481] | 100.0% / 0.0% | 27.13 | 5.5ms / 11.2ms / 12.3ms |
+| **SIMPLIFIED_ADAPTIVE_NO_GUARD** | Offline Synthetic | 1.0000 [0.9591, 1.0000] | 0.6622 | 0.9704 [0.9426, 0.9944] | 0.9418 [0.9194, 0.9615] | 96.4% / 3.6% | 7.56 | 5.2ms / 7.5ms / 8.6ms |
+| **SIMPLIFIED_ADAPTIVE_GUARD** (Baseline) | Offline Synthetic | 1.0000 [0.9591, 1.0000] | 0.6622 | 0.9704 [0.9426, 0.9944] | 0.9418 [0.9194, 0.9617] | 91.8% / 8.2% | 7.29 | 5.3ms / 7.2ms / 7.7ms |
+| **SIMPLIFIED_ADAPTIVE_INTENT_BUDGET** (Exp) | Offline Synthetic | 1.0000 [0.9591, 1.0000] | 0.6644 | 0.9704 [0.9426, 0.9944] | 0.9376 [0.9139, 0.9589] | 91.8% / 8.2% | 8.49 | 5.3ms / 8.2ms / 8.6ms |
 
-Formal Two One-Sided Tests (TOST) with paired t-tests and Wilcoxon signed-rank tests:
+#### Generation, Beyond-Unigram Claim Alignment & Separate Abstention Quality
 
-| Metric | Simplified Adaptive | Hybrid Rerank | Difference | Paired t-test (p) | Wilcoxon (p) | TOST Equivalence (p_tost) | Conclusion |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Recall@5** | 0.9636 | 0.9636 | 0.0000 | 1.000 | 1.000 | 0.000 | **Statistically Equivalent** |
-| **Precision@5** | 0.6855 | 0.6891 | -0.0036 | 0.595 | 0.776 | 9.54e-05 | **Statistically Equivalent** |
-| **MRR** | 0.9326 | 0.9295 | +0.0031 | 0.733 | 1.000 | 1.48e-03 | **Statistically Equivalent** |
-| **nDCG@5** | 0.8997 | 0.8931 | +0.0066 | 0.518 | 0.322 | 1.08e-02 | **Statistically Equivalent** |
-| **Answer Correctness** | 0.3396 | 0.3447 | -0.0051 | 0.083 | 0.079 | 2.96e-14 | **Statistically Equivalent** |
-| **Faithfulness** | 0.9327 | 0.9327 | 0.0000 | 1.000 | 1.000 | 4.41e-21 | **Statistically Equivalent** |
-| **End-to-End Latency** | 7.79 ms | 14.86 ms | **-7.07 ms** | **1.10e-17** | **1.24e-13** | N/A (p > 0.05) | **Statistically Significant Speedup** |
+| Configuration | Token F1 (Ans N=90) | Claim Factual F1 (Ans N=90) | Entity/Numeric F1 (Ans N=90) | Bigram F1 (Ans N=90) | Faithfulness (Ans N=90) | Citation Acc (Ans N=90) | Unans True Abst (N=20, Wilson 95% CI) | Ans False Abst (N=90) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **BM25** | 0.7410 | 0.6640 | 0.7095 | 0.6812 | 0.9963 | 1.0000 | 1.0000 [0.8389, 1.0000] | 0.0000 |
+| **DENSE** | 0.6443 | 0.5666 | 0.6211 | 0.5813 | 0.9963 | 1.0000 | 1.0000 [0.8389, 1.0000] | 0.0667 |
+| **HYBRID** | 0.7284 | 0.6492 | 0.7009 | 0.6695 | 0.9963 | 1.0000 | 1.0000 [0.8389, 1.0000] | 0.0000 |
+| **HYBRID_RERANK** | 0.7500 | 0.6803 | 0.7154 | 0.6982 | 0.9963 | 1.0000 | 1.0000 [0.8389, 1.0000] | 0.0000 |
+| **SIMPLIFIED_ADAPTIVE_NO_GUARD** | 0.7262 | 0.6492 | 0.6987 | 0.6689 | 0.9963 | 1.0000 | 1.0000 [0.8389, 1.0000] | 0.0000 |
+| **SIMPLIFIED_ADAPTIVE_GUARD** | 0.7262 | 0.6492 | 0.6987 | 0.6689 | 0.9963 | 1.0000 | 1.0000 [0.8389, 1.0000] | 0.0000 |
+| **SIMPLIFIED_ADAPTIVE_INTENT_BUDGET** | 0.7262 | 0.6492 | 0.6987 | 0.6689 | 0.9963 | 1.0000 | 1.0000 [0.8389, 1.0000] | 0.0000 |
 
-#### Top-1 Consensus Guard Ablation Analysis
+*Semantic Embedding Cosine & LLM-as-a-Judge RAGAS: `NOT_EXECUTED` offline (no local neural weights / `OFFLINE_EVAL=1`). See [canonical_benchmark_report.md](metadata/canonical_benchmark_report.md) for all 6 pairwise statistical tables (`B=10,000` bootstrap resamples, Holm-Bonferroni families) and the intent-aware rerank budget ablation.*
 
-| Metric | With Guard | Without Guard | Absolute Difference | TOST Status (±0.03 Margin) | Engineering Impact |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Recall@5** | 0.9636 | 0.9636 | 0.0000 | Equivalent (p_tost = 0.000) | Zero recall loss |
-| **MRR** | 0.9326 | 0.9386 | -0.0060 | Equivalent (p_tost = 6.95e-05) | Ranking preserved |
-| **nDCG@5** | 0.8997 | 0.9141 | -0.0144 | Equivalent (p_tost = 1.52e-02) | Cumulative gain preserved |
-| **Answer Correctness** | 0.3396 | 0.3450 | -0.0054 | Equivalent (p_tost = 3.33e-16) | Answer accuracy preserved |
-| **P95 Latency** | **11.5 ms** | 20.9 ms | **-9.4 ms** | Statistically Faster | **1.82× faster tail latency** |
+#### Paired Statistical Summary (`SIMPLIFIED_ADAPTIVE_GUARD` vs. `HYBRID_RERANK`, `NO_GUARD`, & `INTENT_BUDGET`)
+
+*Explicit Delta Convention: $\Delta = \text{SIMPLIFIED\_ADAPTIVE\_GUARD} - \text{Comparator}$ (`Guard - Comp`). Holm-adjusted $p$-values are computed within 3 documented comparison families across all 6 comparators: `retrieval_quality` ($m=10$ active), `generation_quality` ($m=11$ active), and `latency` ($m=6$ active). Zero-variance pairs report `Observed Equal (0 var; TOST N/A)` rather than claiming statistically established equivalence.*
+
+| Comparison | Metric (Family) | Scope | Paired Diff (`Guard - Comp`, 95% Boot CI, B=10k) | Paired t (`p / Holm`) | Wilcoxon (`p / Holm`) | TOST (±0.03) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Guard vs. Hybrid Rerank** | Recall@5 (`retrieval_quality`) | Ans (N=90) | +0.0000 [+0.0000, +0.0000] | N/A (0 var) | N/A (0 var) | Observed Equal (0 var; TOST N/A) |
+| **Guard vs. Hybrid Rerank** | MRR (`retrieval_quality`) | Ans (N=90) | +0.0056 [+0.0000, +0.0167] | `3.200e-01 / 1.000e+00` | `1.000e+00 / 1.000e+00` | **Stat. Equiv** (`p=1.50e-05`) |
+| **Guard vs. Hybrid Rerank** | nDCG@5 (`retrieval_quality`) | Ans (N=90) | +0.0164 [+0.0048, +0.0294] | `9.919e-03 / 6.943e-02` | `1.149e-02 / 8.043e-02` | **Stat. Equiv** (`p=1.54e-02`) |
+| **Guard vs. Hybrid Rerank** | Claim F1 (`generation_quality`) | Ans (N=90) | -0.0311 [-0.0711, +0.0000] | `8.484e-02 / 6.788e-01` | `2.500e-01 / 1.000e+00` | Not Equiv (`p=5.25e-01`) |
+| **Guard vs. Hybrid Rerank** | Mean Latency (`latency`) | All (N=110) | -1.1271ms [-1.4845, -0.7900] | `5.002e-09 / 2.501e-08` | `1.720e-08 / 8.600e-08` | **Faster** (offline fallback) |
+| **Guard vs. No-Guard** | Recall@5 / MRR / Claim F1 | Ans (N=90) | +0.0000 [+0.0000, +0.0000] | N/A (0 var) | N/A (0 var) | Observed Equal (0 var; TOST N/A) |
+| **Guard vs. No-Guard** | nDCG@5 (`retrieval_quality`) | Ans (N=90) | +0.0000 [-0.0007, +0.0008] | `9.255e-01 / 1.000e+00` | `1.000e+00 / 1.000e+00` | **Stat. Equiv** (`p=1.08e-87`) |
+| **Guard vs. Intent Budget** | nDCG@5 (`retrieval_quality`) | Ans (N=90) | +0.0042 [-0.0032, +0.0130] | `3.138e-01 / 1.000e+00` | `4.375e-01 / 1.000e+00` | **Stat. Equiv** (`p=8.83e-09`) |
+| **Guard vs. Intent Budget** | CE Pair Cost (`Guard - Exp`) | All (N=110) | -132 pairs (802 vs. 934) | N/A | N/A | Baseline saves **16.5%** CE pairs (`Exp - Base` nDCG@5 = `-0.0042 [-0.0130, +0.0032]`) |
 
 ---
 
@@ -249,29 +269,31 @@ Formal Two One-Sided Tests (TOST) with paired t-tests and Wilcoxon signed-rank t
 
 Evaluated against Google's FRAMES benchmark (50 multi-hop, multi-document test cases across a 550-chunk Wikipedia corpus, arXiv:2409.12941, report at [FRAMES_EVALUATION_REPORT.md](FRAMES_EVALUATION_REPORT.md)):
 
-| Architecture | Context Recall | Context Precision | Multi-Hop Traversal Rate | Exact Match Rate | Token F1 | Faithfulness | P50 Latency | Mean Latency |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **DENSE** | 0.7093 | 0.8280 | 88.0% | 6.0% | 0.0195 | 0.9415 | 443.2 ms | 438.9 ms |
-| **BM25** | 0.6957 | 0.6487 | 86.0% | 12.0% | 0.0249 | 0.9438 | 18.0 ms | 17.8 ms |
-| **HYBRID** | 0.7410 | 0.7943 | 88.0% | 10.0% | 0.0207 | 0.9395 | 21.7 ms | 22.7 ms |
-| **HYBRID_RERANK** | **0.7533** | **0.8010** | 88.0% | 10.0% | 0.0208 | 0.9371 | 571.5 ms | 625.1 ms |
-| **ORIGINAL_ADAPTIVE (Legacy Monolith)** | 0.6490 | 0.7674 | 76.0% | 8.0% | 0.0215 | 0.9028 | 3137.9 ms | 3057.4 ms |
-| **SIMPLIFIED_ADAPTIVE (Current)** | 0.7410 | 0.7943 | **88.0%** | 10.0% | 0.0207 | 0.9395 | **25.0 ms** | **25.9 ms** |
+| Architecture | Context Recall | Context Precision | Multi-Hop Traversal Rate | Exact Match Rate | Token F1 | Faithfulness | P50 Latency | Mean Latency | Data Source |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **DENSE** | 0.7093 | 0.8280 | 88.0% | 6.0% | 0.0195 | 0.9415 | 443.2 ms | 438.9 ms | Live run |
+| **BM25** | 0.6957 | 0.6487 | 86.0% | 12.0% | 0.0249 | 0.9438 | 18.0 ms | 17.8 ms | Live run |
+| **HYBRID** | 0.7410 | 0.7943 | 88.0% | 10.0% | 0.0207 | 0.9395 | 21.7 ms | 22.7 ms | Live run |
+| **HYBRID_RERANK** | **0.7533** | **0.8010** | 88.0% | 10.0% | 0.0208 | 0.9371 | 571.5 ms | 625.1 ms | Live run |
+| **ORIGINAL_ADAPTIVE (Legacy)** | 0.6490 | 0.7674 | 76.0% | 8.0% | 0.0215 | 0.9028 | 3137.9 ms | 3057.4 ms | Live run |
+| **SIMPLIFIED_ADAPTIVE (Simulated†)** | 0.7410 | 0.7943 | 88.0% | 10.0% | 0.0207 | 0.9395 | ~25 ms | ~26 ms | **Simulation** |
 
-#### Multi-Hop Reasoning Category Breakdown (Simplified Adaptive Pipeline)
+†SIMPLIFIED_ADAPTIVE figures are identical to HYBRID because the consensus-replay script selected HYBRID results for all 50 test cases. See [FRAMES_EVALUATION_REPORT.md](FRAMES_EVALUATION_REPORT.md) for the full audit.
+
+#### Multi-Hop Reasoning Category Breakdown (Historical — HYBRID Architecture)
 
 | Reasoning Category | Cases | Context Recall | Multi-Hop Traversal | Exact Match | Token F1 | P50 Latency |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Multiple constraints | 34 | 0.7407 | 85.3% | 8.8% | 0.0223 | 25.0 ms |
-| Numerical reasoning | 25 | 0.7387 | 88.0% | 4.0% | 0.0077 | 25.4 ms |
-| Post processing | 10 | 0.7417 | 80.0% | 0.0% | 0.0024 | 25.7 ms |
-| Tabular reasoning | 26 | 0.7096 | 84.6% | 7.7% | 0.0189 | 24.5 ms |
-| Temporal reasoning | 22 | 0.7333 | 86.4% | 18.2% | 0.0247 | 25.6 ms |
+| Multiple constraints | 34 | 0.7407 | 85.3% | 8.8% | 0.0223 | 21.7 ms |
+| Numerical reasoning | 25 | 0.7387 | 88.0% | 4.0% | 0.0077 | 22.1 ms |
+| Post processing | 10 | 0.7417 | 80.0% | 0.0% | 0.0024 | 22.4 ms |
+| Tabular reasoning | 26 | 0.7096 | 84.6% | 7.7% | 0.0189 | 21.3 ms |
+| Temporal reasoning | 22 | 0.7333 | 86.4% | 18.2% | 0.0247 | 22.3 ms |
 
-#### Multi-Hop Root Cause Analysis
-1. **Decomposition Penalty Eliminated:** Legacy monolithic adaptive executed recursive sub-query splitting which fragmented multi-hop questions, dropping context recall to 0.6490 and traversal to 76.0%. The Simplified Adaptive architecture's unified dual-filter retrieval and parent expansion retrieves multi-document bridges directly, achieving **0.7410 Context Recall** and **88.0% Traversal**.
-2. **>120× Tail Latency Speedup:** Eliminating recursive planning and sub-query loops dropped P50 latency from **3,137.9 ms down to 25.0 ms**.
-3. **Failure Modalities:** Exact match failures primarily stem from downstream zero-cost arithmetic without code execution (e.g., date subtractions in numerical queries) rather than retrieval misses.
+#### Multi-Hop Root Cause Analysis & Benchmark Integrity Note
+1. **Historical Live Runs vs. Simulation:** The `DENSE`, `BM25`, `HYBRID`, `HYBRID_RERANK`, and `ORIGINAL_ADAPTIVE` rows above come from historical live runs on the 550-chunk Wikipedia corpus. The `SIMPLIFIED_ADAPTIVE` row is a **simulation replay** over `metadata/frames_results.json` that copied `HYBRID` quality metrics on 50/50 cases because the simulated consensus check evaluated to `True` on every query. **No improved FRAMES performance is claimed for Simplified Adaptive until live execution is performed against the original 550-chunk Wikipedia corpus.**
+2. **Historical Decomposition Penalty:** In the live historical runs, `ORIGINAL_ADAPTIVE` (3,137.9 ms P50) dropped Context Recall to 0.6490 and traversal to 76.0% compared to live `HYBRID` (0.7410 Context Recall, 88.0% traversal, 21.7 ms P50), demonstrating that recursive query decomposition hurt both accuracy and latency.
+3. **Failure Modalities:** Exact match failures primarily stem from downstream arithmetic without code execution (e.g., date subtractions in numerical queries) rather than retrieval misses.
 
 ---
 
@@ -284,7 +306,7 @@ Evaluated against Google's FRAMES benchmark (50 multi-hop, multi-document test c
 
 Measured with online Groq generation (llama-3.3-70b-versatile), where network API latency dominates end-to-end execution:
 
-`	ext
+```text
 ---------------------------------------------------------------------------
 Nexus RAG - Standardized Benchmark Report [Mode: ADAPTIVE]
 ---------------------------------------------------------------------------
@@ -462,10 +484,10 @@ python -m src.cli query "What is the mathematical formulation of scaled dot prod
 
 ## Testing & Verification Suite
 
-Nexus maintains a zero-leakage, reproducible test suite containing **122 unit and integration tests**:
+Nexus maintains a zero-leakage, reproducible test suite containing **186 unit and integration tests**:
 
 ```bash
-# 1. Run all 122 unit and integration tests
+# 1. Run all 186 unit and integration tests
 pytest tests/ -v
 
 # 2. Run P0 architectural verification tests
@@ -474,14 +496,14 @@ pytest tests/test_production_rag_p0.py -v
 # 3. Run P1 caching, fusion, and metric verification tests
 pytest tests/test_production_rag_p1.py -v
 
-# 4. Run architectural improvements & consensus guard tests
-pytest tests/test_architectural_improvements.py -v
+# 4. Run architectural improvements & refactored regression tests
+pytest tests/test_architectural_improvements.py tests/test_refactored_production_rag.py -v
 
-# 5. Run the Full Production Benchmark (110 canonical cases)
-python scripts/run_standardized_benchmark.py --split all
+# 5. Run the Canonical Production Benchmark (110 cases, offline synthetic mode)
+python scripts/run_production_benchmark.py --mode offline_synthetic
 
-# 6. Run the Held-Out Standardized Benchmark (66 unseen cases)
-python scripts/run_standardized_benchmark.py --split test
+# 6. Run Real-Model Neural Validation (reports NOT_EXECUTED if weights are unavailable locally)
+python scripts/run_production_benchmark.py --mode neural
 
 # 7. Run the Google FRAMES Multi-Hop Benchmark
 python -m src.evaluation.frames_eval
