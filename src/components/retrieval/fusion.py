@@ -6,6 +6,13 @@ from pydantic import BaseModel, Field
 
 from ..indexing.models import SearchResult
 
+# Canonical RRF Configuration (Single Source of Truth)
+DEFAULT_RRF_K: int = 20
+DEFAULT_BM25_WEIGHT: float = 0.50
+DEFAULT_DENSE_WEIGHT: float = 0.50
+IDENTIFIER_BM25_WEIGHT: float = 0.55
+IDENTIFIER_DENSE_WEIGHT: float = 0.45
+
 
 class UnifiedCandidate(BaseModel):
     """Unified candidate chunk representation across all retrieval strategies."""
@@ -49,9 +56,9 @@ class UnifiedCandidate(BaseModel):
 def reciprocal_rank_fusion(
     bm25_results: Any = None,
     dense_results: Any = None,
-    k: int = 20,
-    bm25_weight: float = 0.50,  # Balanced BM25/Dense fusion
-    dense_weight: float = 0.50,
+    k: int = DEFAULT_RRF_K,
+    bm25_weight: float = DEFAULT_BM25_WEIGHT,  # Default balanced fusion: equal BM25/Dense weight (0.50/0.50)
+    dense_weight: float = DEFAULT_DENSE_WEIGHT,  # When exact technical identifiers detected: [0.55 BM25, 0.45 Dense]
     candidate_lists: Optional[Sequence[Sequence[Any]]] = None,
     top_n: Optional[int] = None,
     exact_identifiers: Optional[Sequence[str]] = None,
@@ -121,7 +128,7 @@ def reciprocal_rank_fusion(
     dense_scores: Dict[str, float] = {}
     keyword_scores: Dict[str, float] = {}
 
-    for cand_list, w in zip(resolved_lists, list_weights):
+    for list_idx, (cand_list, w) in enumerate(zip(resolved_lists, list_weights)):
         for rank, doc in enumerate(cand_list):
             if isinstance(doc, (dict, SearchResult, UnifiedCandidate)) or hasattr(doc, "__getitem__"):
                 doc_id = doc["chunk_id"] if "chunk_id" in doc else getattr(doc, "chunk_id", str(doc))
@@ -136,7 +143,8 @@ def reciprocal_rank_fusion(
             rrf_val = w * (1.0 / (k + rank + 1))
             scores[doc_id] = scores.get(doc_id, 0.0) + rrf_val
 
-            # Track sources and retriever scores
+            # Track sources and retriever scores strictly by retriever identity
+            # (never by weight equality, which collides whenever bm25_weight == dense_weight).
             ret_name = getattr(doc, "retriever_name", None) or (doc.get("retriever_name") if isinstance(doc, dict) else "") or ""
             prov = getattr(doc, "provenance_sources", None) or (doc.get("provenance_sources") if isinstance(doc, dict) else None) or []
             for p in prov:
@@ -145,16 +153,29 @@ def reciprocal_rank_fusion(
             if ret_name and ret_name not in sources[doc_id]:
                 sources[doc_id].append(ret_name)
 
-            if "dense" in str(ret_name).lower() or any("dense" in str(p).lower() for p in prov) or w == dense_weight:
+            ret_lower = str(ret_name).lower()
+            is_dense_hit = "dense" in ret_lower or any("dense" in str(p).lower() for p in prov)
+            is_bm25_hit = (
+                "keyword" in ret_lower
+                or "bm25" in ret_lower
+                or any("bm25" in str(p).lower() or "keyword" in str(p).lower() for p in prov)
+            )
+            # Only fall back to positional inference when explicit (bm25_results, dense_results) were passed
+            # and candidate objects carry no retriever_name/provenance metadata.
+            if not is_dense_hit and not is_bm25_hit and len(resolved_lists) == 2:
+                if bm25_results is not None and dense_results is not None and candidate_lists is None:
+                    is_bm25_hit = (list_idx == 0)
+                    is_dense_hit = (list_idx == 1)
+
+            sc = getattr(doc, "score", None) if not isinstance(doc, dict) else doc.get("score")
+            if is_dense_hit:
                 if "dense" not in sources[doc_id]:
                     sources[doc_id].append("dense")
-                sc = getattr(doc, "score", None) or (doc.get("score") if isinstance(doc, dict) else None)
                 if sc is not None:
                     dense_scores[doc_id] = float(sc)
-            if "keyword" in str(ret_name).lower() or "bm25" in str(ret_name).lower() or any("bm25" in str(p).lower() for p in prov) or w == bm25_weight:
+            if is_bm25_hit:
                 if "bm25" not in sources[doc_id]:
                     sources[doc_id].append("bm25")
-                sc = getattr(doc, "score", None) or (doc.get("score") if isinstance(doc, dict) else None)
                 if sc is not None:
                     keyword_scores[doc_id] = float(sc)
 

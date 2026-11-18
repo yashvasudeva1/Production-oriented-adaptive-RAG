@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from pydantic import BaseModel, Field
 
 from .dense import DenseRetriever
-from .fusion import UnifiedCandidate, fuse_candidates, reciprocal_rank_fusion
+from .fusion import DEFAULT_RRF_K, UnifiedCandidate, fuse_candidates, reciprocal_rank_fusion
 from .keyword import KeywordRetriever
 from ..indexing.bm25_indexer import BM25Indexer
 from ..indexing.models import SearchResult
@@ -45,7 +45,7 @@ class HybridRetriever:
         dense_retriever: Optional[DenseRetriever] = None,
         keyword_retriever: Optional[KeywordRetriever] = None,
         default_top_k: int = 10,
-        rrf_k: int = 60,
+        rrf_k: int = DEFAULT_RRF_K,
         fusion_method: str = "rrf",
     ) -> None:
         self.dense_retriever = dense_retriever or DenseRetriever()

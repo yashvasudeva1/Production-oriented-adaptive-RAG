@@ -102,18 +102,31 @@ class CacheManager:
         """Compute full SHA-256 hash for document chunks, preventing 200-char truncation collisions."""
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    def get_embedding(self, model_name: str, text: str, model_version: str = "v1") -> Optional[List[float]]:
+    def get_embedding(
+        self,
+        model_name: str,
+        text: str,
+        model_version: str = "v1",
+        config_version: str = "default",
+    ) -> Optional[List[float]]:
         if not self.enabled:
             return None
         text_hash = self._full_content_hash(text)
-        key = self._hash_str(f"emb:{model_name}:{model_version}:{text_hash}")
+        key = self._hash_str(f"emb:{model_name}:{model_version}:{config_version}:{text_hash}")
         return self.embedding_cache.get(key)
 
-    def set_embedding(self, model_name: str, text: str, embedding: List[float], model_version: str = "v1") -> None:
+    def set_embedding(
+        self,
+        model_name: str,
+        text: str,
+        embedding: List[float],
+        model_version: str = "v1",
+        config_version: str = "default",
+    ) -> None:
         if not self.enabled:
             return
         text_hash = self._full_content_hash(text)
-        key = self._hash_str(f"emb:{model_name}:{model_version}:{text_hash}")
+        key = self._hash_str(f"emb:{model_name}:{model_version}:{config_version}:{text_hash}")
         self.embedding_cache.set(key, embedding)
 
     def get_retrieval(
@@ -123,6 +136,7 @@ class CacheManager:
         top_k: int,
         mode: str,
         model_info: str = "default",
+        config_version: str = "default",
     ) -> Optional[Any]:
         if not self.enabled:
             return None
@@ -132,7 +146,10 @@ class CacheManager:
         except Exception:
             filter_str = str(filter_repr)
         filter_hash = self._hash_str(filter_str)
-        key = self._hash_str(f"ret:v{self.index_version}:{mode}:{model_info}:{top_k}:{query_hash}:{filter_hash}")
+        cfg_hash = self._hash_str(str(config_version))
+        key = self._hash_str(
+            f"ret:v{self.index_version}:{mode}:{model_info}:{cfg_hash}:{top_k}:{query_hash}:{filter_hash}"
+        )
         return self.retrieval_cache.get(key)
 
     def set_retrieval(
@@ -143,6 +160,7 @@ class CacheManager:
         mode: str,
         results: Any,
         model_info: str = "default",
+        config_version: str = "default",
     ) -> None:
         if not self.enabled:
             return
@@ -152,25 +170,43 @@ class CacheManager:
         except Exception:
             filter_str = str(filter_repr)
         filter_hash = self._hash_str(filter_str)
-        key = self._hash_str(f"ret:v{self.index_version}:{mode}:{model_info}:{top_k}:{query_hash}:{filter_hash}")
+        cfg_hash = self._hash_str(str(config_version))
+        key = self._hash_str(
+            f"ret:v{self.index_version}:{mode}:{model_info}:{cfg_hash}:{top_k}:{query_hash}:{filter_hash}"
+        )
         self.retrieval_cache.set(key, results)
 
-    def get_rerank_score(self, model_name: str, query: str, text: str) -> Optional[float]:
+    def get_rerank_score(
+        self,
+        model_name: str,
+        query: str,
+        text: str,
+        model_version: str = "v1",
+        config_version: str = "default",
+    ) -> Optional[float]:
         if not self.enabled:
             return None
         # Full content hash of candidate text prevents truncation collisions
         text_hash = self._full_content_hash(text)
         query_hash = self._hash_str(query.strip().lower())
-        key = self._hash_str(f"rrk:{model_name}:{query_hash}:{text_hash}")
+        key = self._hash_str(f"rrk:{model_name}:{model_version}:{config_version}:{query_hash}:{text_hash}")
         return self.reranker_cache.get(key)
 
-    def set_rerank_score(self, model_name: str, query: str, text: str, score: float) -> None:
+    def set_rerank_score(
+        self,
+        model_name: str,
+        query: str,
+        text: str,
+        score: float,
+        model_version: str = "v1",
+        config_version: str = "default",
+    ) -> None:
         if not self.enabled:
             return
         # Full content hash of candidate text prevents truncation collisions
         text_hash = self._full_content_hash(text)
         query_hash = self._hash_str(query.strip().lower())
-        key = self._hash_str(f"rrk:{model_name}:{query_hash}:{text_hash}")
+        key = self._hash_str(f"rrk:{model_name}:{model_version}:{config_version}:{query_hash}:{text_hash}")
         self.reranker_cache.set(key, float(score))
 
     def bump_index_version(self) -> int:

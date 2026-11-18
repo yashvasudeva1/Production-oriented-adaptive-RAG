@@ -35,6 +35,13 @@ class BaseEmbedder(ABC):
         """Embedding vector dimension."""
         pass
 
+    @property
+    def cache_revision(self) -> str:
+        """Stable cache identity incorporating model name, revision, and output dimension."""
+        name = getattr(self, "model_name", self.__class__.__name__)
+        rev = getattr(self, "model_revision", os.getenv("EMBEDDING_MODEL_REVISION", "v1"))
+        return f"{name}:rev={rev}:dim={self.dimension}"
+
 
 class MockEmbedder(BaseEmbedder):
     """
@@ -120,6 +127,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         batch_size: int = 32,
     ) -> None:
         self.model_name = model_name
+        self.model_revision = os.getenv("EMBEDDING_MODEL_REVISION", "v1")
         self.device = device
         self.batch_size = batch_size
         self._model = None
@@ -238,12 +246,17 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         q_formatted = self.format_text(query, is_query=True)
         from ..cache import CacheManager
         cache = CacheManager.get_instance()
-        cached = cache.get_embedding(self.model_name, q_formatted)
+        emb_version = f"rev={self.model_revision}:dim={self.dimension}:device={self.device}"
+        emb_cfg = f"norm=True:prefix={self.model_name.lower()}"
+        cached = cache.get_embedding(
+            self.model_name, q_formatted, model_version=emb_version, config_version=emb_cfg
+        )
         if cached is not None:
             return cached
 
-        if q_formatted in self._query_cache:
-            return self._query_cache[q_formatted]
+        local_key = f"{emb_version}:{q_formatted}"
+        if local_key in self._query_cache:
+            return self._query_cache[local_key]
 
         results = self.embed_texts([query], is_query=True)
         vec = results[0] if results else [0.0] * self.dimension
@@ -252,8 +265,10 @@ class SentenceTransformerEmbedder(BaseEmbedder):
             oldest_key = next(iter(self._query_cache))
             del self._query_cache[oldest_key]
 
-        self._query_cache[q_formatted] = vec
-        cache.set_embedding(self.model_name, q_formatted, vec)
+        self._query_cache[local_key] = vec
+        cache.set_embedding(
+            self.model_name, q_formatted, vec, model_version=emb_version, config_version=emb_cfg
+        )
         return vec
 
 
@@ -398,12 +413,18 @@ class GeminiEmbedder(BaseEmbedder):
         q_clean = query.strip()
         from ..cache import CacheManager
         cache = CacheManager.get_instance()
-        cached = cache.get_embedding(self.model_name, q_clean)
+        emb_rev = getattr(self, "model_revision", os.getenv("EMBEDDING_MODEL_REVISION", "v1"))
+        emb_version = f"rev={emb_rev}:dim={self._dimension}"
+        emb_cfg = "task=RETRIEVAL_QUERY"
+        cached = cache.get_embedding(
+            self.model_name, q_clean, model_version=emb_version, config_version=emb_cfg
+        )
         if cached is not None:
             return cached
 
-        if q_clean in self._query_cache:
-            return self._query_cache[q_clean]
+        local_key = f"{emb_version}:{q_clean}"
+        if local_key in self._query_cache:
+            return self._query_cache[local_key]
 
         if not self.api_key:
             allow_mock = (
@@ -440,7 +461,9 @@ class GeminiEmbedder(BaseEmbedder):
             oldest_key = next(iter(self._query_cache))
             del self._query_cache[oldest_key]
 
-        self._query_cache[q_clean] = vec
-        cache.set_embedding(self.model_name, q_clean, vec)
+        self._query_cache[local_key] = vec
+        cache.set_embedding(
+            self.model_name, q_clean, vec, model_version=emb_version, config_version=emb_cfg
+        )
         return vec
 

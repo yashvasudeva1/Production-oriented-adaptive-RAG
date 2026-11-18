@@ -30,6 +30,7 @@ class RetrievalMetadata(BaseModel):
     multi_query_candidates: int = 0
     fused_candidates: int = 0
     reranked_candidates: int = 0
+    rerank_pool_size: int = 0
     parent_expanded_count: int = 0
     filtered_context_candidates: int = 0
     filter_selectivity: Optional[float] = None
@@ -37,6 +38,8 @@ class RetrievalMetadata(BaseModel):
     confidence_tier: Optional[str] = None
     confidence_signals: Dict[str, float] = Field(default_factory=dict)
     latency_breakdown_ms: Dict[str, float] = Field(default_factory=dict)
+    # Pre-generation retrieved candidate records (decoupled from citation validation & abstention)
+    retrieved_candidates: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class RAGResponse(BaseModel):
@@ -70,4 +73,5 @@ class RerankStageResult(BaseModel):
     candidates: List[RerankerResult] = Field(default_factory=list)
     did_rerank: bool = False
     can_bypass: bool = False
+    rerank_pool_size: int = 0
     rerank_latency_ms: float = 0.0
